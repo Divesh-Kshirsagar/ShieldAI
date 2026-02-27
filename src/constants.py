@@ -32,10 +32,10 @@ ALERT_LOG_PATH: str = os.getenv("ALERT_LOG_PATH", "data/alerts/evidence_log.json
 # The rolling mean of valid CETP inlet COD readings sits at ~193 mg/L.
 COD_BASELINE: float = float(os.getenv("COD_BASELINE", "193.0"))  # mg/L
 
-# NOTE: COD_THRESHOLD is intentionally lowered to 250 mg/L for the prototype demo
-# because the simulated factory spikes are moderate. In production this should be
-# raised to 450+ mg/L based on actual industrial discharge standards.
-COD_THRESHOLD: float = float(os.getenv("COD_THRESHOLD", "250.0"))  # mg/L
+# NOTE: COD_THRESHOLD is intentionally set to 200 mg/L for the prototype demo.
+# Real CETP data (priya_cetp_i.csv) has a max of 230.8 mg/L with 206 readings
+# exceeding 200. In production, raise this to 450+ mg/L based on regulatory limits.
+COD_THRESHOLD: float = float(os.getenv("COD_THRESHOLD", "200.0"))  # mg/L
 
 # ---------------------------------------------------------------------------
 # Temporal backtracking (backtrack.py)

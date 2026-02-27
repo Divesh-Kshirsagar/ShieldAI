@@ -4,9 +4,24 @@ SHIELD AI — Phase 1: Temporal Backtracking (The "Time Machine" Join)
 
 The core attribution engine. For each CETP shock event at time T:
     1. Compute T_backtrack = T − PIPE_TRAVEL_MINUTES.
-    2. Run interval_join_left against the Industrial Discharge Stream,
-       finding factory rows within ±ASOF_TOLERANCE window of T_backtrack.
-    3. The matched factory row becomes the evidence record.
+    2. Find the factory CSV row whose timestamp is closest to T_backtrack,
+       within ±ASOF_TOLERANCE_SECONDS.
+    3. Return the matched factory_id + discharge readings as the evidence record.
+
+Implementation note
+-------------------
+Pathway's interval_join_left / asof_join across two independently-clocked
+streaming CSV sources can produce None matches in 0.29.x because each source
+has its own internal logical clock and the join closes windows before rows from
+the other stream arrive. For this prototype we therefore perform the temporal
+attribution inside the pw.io.subscribe() callback using pandas, which is:
+  - Guaranteed to see all factory rows (they're pre-loaded into memory once)
+  - Deterministic (no streaming clock race conditions)
+  - Equally correct — the factory CSVs are static historical data
+
+In a production deployment with genuinely live per-factory MPCB feeds,
+the correct approach would be pw.temporal.asof_join_left on a single
+merged stream with a shared clock. This is the documented upgrade path for v2.
 
 NOTE: PIPE_TRAVEL_MINUTES = 15 is a FIXED CONSTANT for v1.
 In v2 this will be replaced by a dynamic, pipe-length-aware calculation
@@ -14,91 +29,108 @@ derived from GIS network data and real-time flow-rate sensors.
 Do NOT remove this constant — it is the single source of truth for the
 temporal offset used in the attribution logic.
 
-Why interval_join_left (not asof_join)
----------------------------------------
-In Pathway 0.29.x, asof_join with JoinMode.LEFT across heterogeneous streaming
-tables causes a Rust-level panic ("key missing in output table"). interval_join_left
-is the stable, recommended alternative for bounded-window temporal joins.
-It matches each LEFT row to ALL RIGHT rows whose time falls within:
-    [LEFT.backtrack_ts + lower_bound,  LEFT.backtrack_ts + upper_bound]
-
 Usage
 -----
-    from src.backtrack import attribute_factory
-    evidence = attribute_factory(shock_events, industrial_stream)
+    from src.backtrack import build_factory_index, attribute_event
+    factory_index = build_factory_index()
+    evidence = attribute_event(cetp_time="2026-02-01 12:23", factory_index=factory_index)
 """
 
 import datetime
+from pathlib import Path
 
-import pathway as pw
+import pandas as pd
 
-from src.constants import PIPE_TRAVEL_MINUTES, ASOF_TOLERANCE_SECONDS
+from src.constants import (
+    FACTORY_DATA_DIR,
+    PIPE_TRAVEL_MINUTES,
+    ASOF_TOLERANCE_SECONDS,
+)
 
 
-def attribute_factory(
-    shock_events: pw.Table,
-    industrial_stream: pw.Table,
-) -> pw.Table:
-    """Run the temporal backtrack join to attribute a factory to each CETP spike.
+def build_factory_index(factory_dir: str = FACTORY_DATA_DIR) -> pd.DataFrame:
+    """Load all factory CSVs into a single sorted DataFrame for fast backtrack lookup.
+
+    Called once at pipeline startup — factory data is historical so loading
+    it eagerly is correct and avoids cross-stream clock issues.
 
     Args:
-        shock_events:      Output of tripwire.detect_anomalies().
-                           Columns: time (str), cod_value, breach_mag, alert_level.
-        industrial_stream: Clean factory stream (NORMAL rows only).
-                           Columns: time (str), factory_id, cod, bod, ph, tss.
+        factory_dir: Directory containing factory_A/B/C/D.csv.
 
     Returns:
-        Pathway Table (evidence_table) with columns:
-            cetp_event_time     — CETP breach timestamp string
-            cetp_cod            — CETP COD at breach
-            breach_mag          — magnitude above baseline
-            alert_level         — HIGH / MEDIUM
-            attributed_factory  — factory_id of matched discharge
-            factory_cod         — factory COD at T_backtrack window
-            factory_bod         — factory BOD at T_backtrack window
-            factory_tss         — factory TSS at T_backtrack window
+        DataFrame with columns: factory_id, time_dt (datetime), cod, bod, ph, tss.
+        Sorted by time ascending; only rows with non-null COD included.
     """
-    travel_duration  = datetime.timedelta(minutes=PIPE_TRAVEL_MINUTES)
-    tolerance_td     = datetime.timedelta(seconds=ASOF_TOLERANCE_SECONDS)
+    dfs = []
+    factory_path = Path(factory_dir)
+    for csv_path in sorted(factory_path.glob("factory_*.csv")):
+        df = pd.read_csv(csv_path, dtype={"time": str})
+        df["time_dt"] = pd.to_datetime(df["time"], format="%Y-%m-%d %H:%M", errors="coerce")
+        df["cod"]     = pd.to_numeric(df["cod"], errors="coerce")
+        df["bod"]     = pd.to_numeric(df["bod"], errors="coerce")
+        df["ph"]      = pd.to_numeric(df["ph"], errors="coerce")
+        df["tss"]     = pd.to_numeric(df["tss"], errors="coerce")
+        # Only keep rows with a valid COD reading (NORMAL rows, no BLACKOUT)
+        df = df.dropna(subset=["cod"])[["factory_id", "time_dt", "cod", "bod", "ph", "tss"]]
+        dfs.append(df)
 
-    # Step 1 — Parse timestamps to DatetimeNaive and compute backtrack key
-    shock_ts = shock_events.with_columns(
-        backtrack_ts = pw.this.time.dt.strptime(fmt="%Y-%m-%d %H:%M")
-                       - pw.Duration(minutes=PIPE_TRAVEL_MINUTES),
-    )
+    index = pd.concat(dfs, ignore_index=True).sort_values("time_dt").reset_index(drop=True)
+    print(f"  [BACKTRACK] Factory index loaded: {len(index):,} rows across "
+          f"{index['factory_id'].nunique()} factories")
+    return index
 
-    factory_ts = industrial_stream.with_columns(
-        ts = pw.this.time.dt.strptime(fmt="%Y-%m-%d %H:%M")
-    )
 
-    # Step 2 — interval_join_left:
-    # LEFT join key  = shock_ts.backtrack_ts
-    # RIGHT join key = factory_ts.ts
-    # Window: factory row must satisfy
-    #   backtrack_ts - tolerance <= factory.ts <= backtrack_ts + tolerance
-    #
-    # JoinMode is LEFT (interval_join_left) — unmatched shock events are kept
-    # with None values for factory columns (no false negatives).
-    evidence = (
-        shock_ts.interval_join_left(
-            factory_ts,
-            shock_ts.backtrack_ts,
-            factory_ts.ts,
-            pw.temporal.Interval(
-                lower_bound=-tolerance_td,
-                upper_bound= tolerance_td,
-            ),
-        )
-        .select(
-            cetp_event_time    = pw.left.time,
-            cetp_cod           = pw.left.cod_value,
-            breach_mag         = pw.left.breach_mag,
-            alert_level        = pw.left.alert_level,
-            attributed_factory = pw.right.factory_id,
-            factory_cod        = pw.right.cod,
-            factory_bod        = pw.right.bod,
-            factory_tss        = pw.right.tss,
-        )
-    )
+def attribute_event(
+    cetp_time: str,
+    factory_index: pd.DataFrame,
+    travel_minutes: int = PIPE_TRAVEL_MINUTES,
+    tolerance_seconds: int = ASOF_TOLERANCE_SECONDS,
+) -> dict:
+    """Find the factory most likely responsible for a CETP shock event.
 
-    return evidence
+    Searches factory_index for the row closest to T_backtrack within the
+    tolerance window. If multiple factories have rows in the window, the one
+    with the highest COD reading is attributed (highest discharge = culprit).
+
+    Args:
+        cetp_time:         Timestamp string of the CETP shock event ('YYYY-MM-DD HH:MM').
+        factory_index:     Pre-loaded factory DataFrame from build_factory_index().
+        travel_minutes:    Pipe travel time in minutes (default: PIPE_TRAVEL_MINUTES).
+        tolerance_seconds: Search window radius in seconds (default: ASOF_TOLERANCE_SECONDS).
+
+    Returns:
+        Dict with keys: attributed_factory, factory_cod, factory_bod, factory_tss,
+        backtrack_time. All values are None if no factory row found in the window.
+    """
+    t               = pd.to_datetime(cetp_time, format="%Y-%m-%d %H:%M", errors="coerce")
+    t_backtrack     = t - datetime.timedelta(minutes=travel_minutes)
+    tolerance_td    = datetime.timedelta(seconds=tolerance_seconds)
+    t_lower         = t_backtrack - tolerance_td
+    t_upper         = t_backtrack + tolerance_td
+
+    window_rows = factory_index[
+        (factory_index["time_dt"] >= t_lower) &
+        (factory_index["time_dt"] <= t_upper)
+    ]
+
+    if window_rows.empty:
+        return {
+            "attributed_factory": None,
+            "factory_cod":        None,
+            "factory_bod":        None,
+            "factory_tss":        None,
+            "backtrack_time":     t_backtrack.strftime("%Y-%m-%d %H:%M"),
+        }
+
+    # Attribution rule: highest COD reading in the window = most likely culprit.
+    # NOTE: In v2 this will be augmented with chemical fingerprint matching
+    # and statistical weighting by factory discharge permit volume.
+    best = window_rows.loc[window_rows["cod"].idxmax()]
+
+    return {
+        "attributed_factory": best["factory_id"],
+        "factory_cod":        round(float(best["cod"]), 2),
+        "factory_bod":        round(float(best["bod"]), 2) if pd.notna(best["bod"]) else None,
+        "factory_tss":        round(float(best["tss"]), 2) if pd.notna(best["tss"]) else None,
+        "backtrack_time":     t_backtrack.strftime("%Y-%m-%d %H:%M"),
+    }

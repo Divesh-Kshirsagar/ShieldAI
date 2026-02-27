@@ -44,7 +44,10 @@ from src.constants import CETP_DATA_DIR, FACTORY_DATA_DIR
 class CETPSchema(pw.Schema):
     """Schema for data/cetp/cetp_clean.csv."""
 
-    s_no:             int   = pw.column_definition(primary_key=True)
+    # NOTE: s_no is not primary_key — Pathway auto-generates unique IDs from
+    # (file_path, row_position). Using s_no as PK would be fine for a single
+    # CSV but we keep it consistent with FactorySchema (see below).
+    s_no:             int
     time:             str
     cetp_inlet_cod:   float | None
     cetp_inlet_bod:   float | None
@@ -61,7 +64,12 @@ class CETPSchema(pw.Schema):
 class FactorySchema(pw.Schema):
     """Schema for data/factories/factory_*.csv."""
 
-    s_no:        int   = pw.column_definition(primary_key=True)
+    # NOTE: s_no MUST NOT be primary_key here. All 4 factory CSVs share the
+    # same s_no range (1-18781). If marked as PK, Pathway would see 4 × 18781
+    # duplicate keys when reading the directory, causing 'duplicated entries'
+    # errors in the asof/interval join engine. Pathway auto-generates unique
+    # row IDs from (filename, row_position) instead, which are globally unique.
+    s_no:        int
     time:        str
     factory_id:  str
     cod:         float | None

@@ -2,7 +2,8 @@
 SHIELD AI — Phase 1: Evidence Log & Alert Dispatch (The Evidence Log)
 =====================================================================
 
-Consumes the evidence_table from backtrack.py and:
+Consumes the shock_events table from tripwire.py, runs temporal backtrack
+attribution via backtrack.attribute_event(), then:
     1. Appends every attribution record to an un-falsifiable JSONL log.
     2. Optionally fires a webhook POST (configurable via SHIELD_WEBHOOK_URL env var).
 
@@ -16,7 +17,8 @@ Each line is a complete, self-contained JSON object with all evidence fields.
 Usage
 -----
     from src.alert import attach_alert_sink
-    attach_alert_sink(evidence_table)   # registers Pathway sink; call pw.run() after
+    factory_index = build_factory_index()
+    attach_alert_sink(shock_events, factory_index)  # registers pw.io.subscribe
 """
 
 import json
@@ -25,10 +27,12 @@ import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pathway as pw
 
+from src.backtrack import attribute_event, build_factory_index
 from src.constants import ALERT_LOG_PATH, SHIELD_WEBHOOK_URL
 
 
@@ -36,103 +40,114 @@ from src.constants import ALERT_LOG_PATH, SHIELD_WEBHOOK_URL
 # JSONL evidence sink
 # ---------------------------------------------------------------------------
 
-def _write_evidence_row(key: pw.Pointer, row: dict, time: int, is_addition: bool) -> None:
-    """Pathway subscribe callback — writes one evidence record to the JSONL log.
+def _make_evidence_callback(
+    factory_index,
+) -> Any:
+    """Return a pw.io.subscribe callback that runs backtrack attribution on each alert.
 
     Args:
-        key:        Pathway row key (unused but required by subscribe signature).
-        row:        Dict of column name → value for this evidence row.
-        time:       Pathway internal event timestamp (ms, unused here).
-        is_addition: True when a new row is added; False on retraction (we skip).
+        factory_index: Pre-loaded pandas DataFrame from backtrack.build_factory_index().
+
+    Returns:
+        Callable matching the pw.io.subscribe signature.
     """
-    # NOTE: Retractions can occur in Pathway when upstream data is corrected.
-    # We only log additions to keep the audit trail append-only and un-falsifiable.
-    if not is_addition:
-        return
 
-    Path(ALERT_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+    def _callback(key: pw.Pointer, row: dict, time: int, is_addition: bool) -> None:
+        """Write one evidence record to the JSONL log.
 
-    record = {
-        "logged_at":          datetime.now(tz=timezone.utc).isoformat(),
-        "cetp_event_time":    row.get("cetp_event_time"),
-        "cetp_cod":           row.get("cetp_cod"),
-        "breach_mag":         row.get("breach_mag"),
-        "alert_level":        row.get("alert_level"),
-        "backtrack_time":     row.get("backtrack_time"),
-        "attributed_factory": row.get("attributed_factory"),
-        "factory_cod":        row.get("factory_cod"),
-        "factory_bod":        row.get("factory_bod"),
-        "factory_tss":        row.get("factory_tss"),
-    }
+        Args:
+            key:         Pathway row key (unused).
+            row:         Dict of column name → value for this shock event row.
+            time:        Pathway internal event timestamp (ms), unused here.
+            is_addition: True when a new row is added; False on retraction (skipped).
+        """
+        # NOTE: Retractions can occur when upstream data is corrected.
+        # We only log additions to keep the audit trail append-only.
+        if not is_addition:
+            return
 
-    with open(ALERT_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+        cetp_time = row.get("time", "")
+        cetp_cod  = row.get("cod_value") or row.get("cetp_inlet_cod")
+        breach    = row.get("breach_mag")
+        level     = row.get("alert_level", "MEDIUM")
 
-    print(
-        f"[ALERT] {record['cetp_event_time']} | "
-        f"Factory: {record['attributed_factory']} | "
-        f"COD: {record['cetp_cod']} mg/L | "
-        f"Level: {record['alert_level']}"
-    )
+        # Run temporal backtrack attribution (pandas lookup)
+        attribution = attribute_event(cetp_time, factory_index)
 
-    # Fire webhook if configured
-    if SHIELD_WEBHOOK_URL:
-        _fire_webhook(record)
+        record = {
+            "logged_at":          datetime.now(tz=timezone.utc).isoformat(),
+            "cetp_event_time":    cetp_time,
+            "cetp_cod":           cetp_cod,
+            "breach_mag":         breach,
+            "alert_level":        level,
+            "backtrack_time":     attribution["backtrack_time"],
+            "attributed_factory": attribution["attributed_factory"],
+            "factory_cod":        attribution["factory_cod"],
+            "factory_bod":        attribution["factory_bod"],
+            "factory_tss":        attribution["factory_tss"],
+        }
+
+        Path(ALERT_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        with open(ALERT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+        print(
+            f"[ALERT] {record['cetp_event_time']} | "
+            f"Factory: {record['attributed_factory']} | "
+            f"COD: {record['cetp_cod']} mg/L | "
+            f"Level: {record['alert_level']}"
+        )
+
+        if SHIELD_WEBHOOK_URL:
+            _fire_webhook(record)
+
+    return _callback
 
 
 # ---------------------------------------------------------------------------
 # Pathway sink registration
 # ---------------------------------------------------------------------------
 
-def attach_alert_sink(evidence_table: pw.Table) -> None:
-    """Register the JSONL writer as a Pathway subscribe sink on evidence_table.
+def attach_alert_sink(
+    shock_events: pw.Table,
+    factory_index=None,
+) -> None:
+    """Register the JSONL writer as a Pathway subscribe sink on shock_events.
 
-    Call this before pw.run() so Pathway knows to invoke _write_evidence_row
-    for every new row produced by backtrack.attribute_factory().
+    Builds the factory index if not supplied, then attaches the callback.
 
     Args:
-        evidence_table: Output of backtrack.attribute_factory().
+        shock_events:   Output of tripwire.detect_anomalies().
+        factory_index:  Pre-loaded factory DataFrame. Built automatically if None.
     """
-    pw.io.subscribe(evidence_table, _write_evidence_row)
+    if factory_index is None:
+        factory_index = build_factory_index()
+
+    pw.io.subscribe(shock_events, _make_evidence_callback(factory_index))
 
 
 # ---------------------------------------------------------------------------
-# Webhook dispatch (Phase 1 stub)
+# Webhook dispatch
 # ---------------------------------------------------------------------------
 
 def _fire_webhook(record: dict) -> None:
-    """POST the evidence record to the configured webhook URL.
-
-    NOTE: This is a best-effort fire-and-forget call. Failures are logged
-    to stdout but do not raise — the JSONL sink is the primary audit trail.
-
-    Args:
-        record: Evidence dict to POST as JSON body.
-    """
+    """POST the evidence record to the configured webhook URL (best-effort)."""
     try:
-        response = httpx.post(
-            SHIELD_WEBHOOK_URL,
-            json=record,
-            timeout=5.0,
-        )
+        response = httpx.post(SHIELD_WEBHOOK_URL, json=record, timeout=5.0)
         response.raise_for_status()
-        print(f"[WEBHOOK] Delivered to {SHIELD_WEBHOOK_URL} — HTTP {response.status_code}")
+        print(f"[WEBHOOK] Delivered — HTTP {response.status_code}")
     except Exception as exc:  # noqa: BLE001
         print(f"[WEBHOOK] Delivery failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
-# Email alert (Phase 3 stub — wired but not called in Phase 1)
+# Email alert (Phase 3 stub)
 # ---------------------------------------------------------------------------
 
 def send_email_alert(record: dict) -> None:
-    """Send an HTML email alert for a single evidence record.
+    """Send an HTML email alert for a single evidence record (Phase 3 stub).
 
-    NOTE: This is a Phase 3 feature stub. Configure via env vars:
-        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO
-
-    Args:
-        record: Evidence dict (same shape written to JSONL).
+    Configure via env vars: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO.
     """
     smtp_host = os.getenv("SMTP_HOST", "")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
@@ -141,20 +156,18 @@ def send_email_alert(record: dict) -> None:
     to_addr   = os.getenv("ALERT_EMAIL_TO", "")
 
     if not all([smtp_host, smtp_user, smtp_pass, to_addr]):
-        # NOTE: Email sending is disabled until SMTP env vars are configured.
-        return
+        return  # SMTP not configured
 
     body = f"""
     <h2>⚠️ SHIELD AI — Shock Load Alert</h2>
     <table>
       <tr><td><b>CETP Event Time</b></td><td>{record['cetp_event_time']}</td></tr>
       <tr><td><b>CETP COD</b></td><td>{record['cetp_cod']} mg/L</td></tr>
-      <tr><td><b>Breach Magnitude</b></td><td>{record['breach_mag']:.2f} mg/L above baseline</td></tr>
       <tr><td><b>Alert Level</b></td><td>{record['alert_level']}</td></tr>
       <tr><td><b>Attributed Factory</b></td><td><strong>{record['attributed_factory']}</strong></td></tr>
-      <tr><td><b>Factory COD at T-15min</b></td><td>{record['factory_cod']} mg/L</td></tr>
+      <tr><td><b>Factory COD @ T-15min</b></td><td>{record['factory_cod']} mg/L</td></tr>
     </table>
-    <p>Evidence logged to: {ALERT_LOG_PATH}</p>
+    <p>Evidence logged: {ALERT_LOG_PATH}</p>
     """
 
     msg = MIMEText(body, "html")
@@ -167,7 +180,6 @@ def send_email_alert(record: dict) -> None:
             server.starttls()
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
-        print(f"[EMAIL] Alert sent to {to_addr}")
     except Exception as exc:  # noqa: BLE001
         print(f"[EMAIL] Send failed: {exc}")
 
@@ -177,10 +189,7 @@ def send_email_alert(record: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def generate_pdf_report(records: list[dict], out_path: str) -> str:
-    """Generate a PDF summary of all evidence records.
-
-    NOTE: Phase 3 feature stub. Requires fpdf2 (already in pyproject.toml).
-    Called by the Streamlit dashboard's "Download Report" button.
+    """Generate a PDF summary of all evidence records (Phase 3 stub).
 
     Args:
         records:  List of evidence dicts (read from evidence_log.jsonl).
@@ -189,7 +198,7 @@ def generate_pdf_report(records: list[dict], out_path: str) -> str:
     Returns:
         Absolute path to the generated PDF.
     """
-    from fpdf import FPDF  # deferred import — fpdf2 is optional in Phase 1
+    from fpdf import FPDF  # deferred — fpdf2 optional in Phase 1
 
     pdf = FPDF()
     pdf.add_page()

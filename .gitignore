@@ -48,3 +48,7 @@ data/alerts/*
 
 # Ignore cleaned CETP CSV (generated from priya_cetp_i.csv)
 data/cetp/cetp_clean.csv
+
+# Generated Presentation
+generate_presentation.py
+anomaly_detection_presentation.pptx

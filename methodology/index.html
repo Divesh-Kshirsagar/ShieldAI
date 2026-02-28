@@ -507,6 +507,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#phase-4-anti-cheat-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4: Anti-Cheat Detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4: Anti-Cheat Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#zero-variance-alarm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zero-Variance Alarm
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chemical-fingerprint-dilution-tamper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chemical Fingerprint (Dilution Tamper)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#guilt-by-disconnection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guilt-by-Disconnection
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#streaming-vs-batch" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -687,6 +737,26 @@
 </table>
 <p>The NA gap pattern (sensor fires every ~3 rows in the real data) is replicated in all factory CSVs to maintain MPCB transmission spec consistency.</p>
 <hr />
+<h2 id="phase-4-anti-cheat-detection">Phase 4: Anti-Cheat Detection</h2>
+<p>Three distinct tampering signatures are detected by <code>anti_cheat.py</code>, each using a pandas tumbling-window approach consistent with the backtrack attribution engine:</p>
+<h3 id="zero-variance-alarm">Zero-Variance Alarm</h3>
+<p>A factory sensor that reports the <strong>exact same COD value</strong> in every reading across a 5-minute window is flagged as digitally tampered. Real sensors always show minor variation (instrument noise ≥ 0.1 mg/L). A locked reading indicates copy-paste of a previous compliant value.</p>
+<ul>
+<li><strong>Signal:</strong> FACTORY_C — constant 115.00 mg/L across all 18,781 rows</li>
+<li><strong>Result:</strong> 2,439 windows flagged</li>
+</ul>
+<h3 id="chemical-fingerprint-dilution-tamper">Chemical Fingerprint (Dilution Tamper)</h3>
+<p>A factory that adds clean water to dilute a sample before the sensor reads it will show a <strong>COD drop ≥80%</strong> while <strong>TSS stays high</strong> (solids don't dissolve). This COD/TSS divergence is the physical signature of the bucket trick.</p>
+<ul>
+<li><strong>Signal:</strong> Implemented and active; fires when COD drops ≥ 80% vs prior window while TSS ≥ 80% of its prior window value</li>
+</ul>
+<h3 id="guilt-by-disconnection">Guilt-by-Disconnection</h3>
+<p>A factory that strategically disconnects its sensor during a discharge event shows a <strong>high ratio of null (BLACKOUT) rows</strong> in the corresponding time window. A window with ≥80% null COD readings across ≥10 rows is flagged.</p>
+<ul>
+<li><strong>Signal:</strong> FACTORY_D — 12,608 of 18,781 rows are null (67% overall, clustered in blackout windows)</li>
+<li><strong>Result:</strong> 125 windows flagged</li>
+</ul>
+<hr />
 <h2 id="streaming-vs-batch">Streaming vs Batch</h2>
 <table>
 <thead>
@@ -711,6 +781,10 @@
 <tr>
 <td>Backpressure</td>
 <td>Pathway's internal scheduler handles CSV tail lag</td>
+</tr>
+<tr>
+<td>Anti-cheat timing</td>
+<td>Run <code>run_anticheat.py</code> once after new factory data arrives; re-run on schedule</td>
 </tr>
 </tbody>
 </table>

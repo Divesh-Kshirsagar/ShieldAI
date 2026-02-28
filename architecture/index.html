@@ -458,6 +458,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#anti-cheat-detection-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Anti-Cheat Detection Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#streaming-design" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -615,33 +626,47 @@
 <h1 id="architecture">Architecture</h1>
 <h2 id="system-overview">System Overview</h2>
 <pre class="mermaid"><code>flowchart TD
-    A["priya_cetp_i.csv (real)"] --&gt; B["ingest.py\nMPCB col rename\nNA → null float"]
-    C["factory_A/B/C/D.csv (simulated)"] --&gt; D["ingest.py\nNA → BLACKOUT"]
-    B --&gt; E["tripwire.py\nCOD ≥ threshold\n→ shock_events"]
-    D --&gt; F["aggregate.py\nunified stream"]
-    F --&gt; G["backtrack.py\nbuild_factory_index()"]
-    E --&gt; H["alert.py\npw.io.subscribe callback\nattribute_event()"]
-    G --&gt; H
-    H --&gt; I["evidence_log.jsonl\nappend-only"]
-    I --&gt; J["app.py\nStreamlit dashboard"]</code></pre>
+    A["priya_cetp_i.csv (real)"] --&gt; B["ingest.py\nMPCB col rename · NA → null"]
+    C["factory_A/B/C/D.csv (simulated)"] --&gt; D["ingest.py\nNA → BLACKOUT tagging"]
+    B --&gt; E["tripwire.py\nCOD ≥ threshold → shock_events"]
+    D --&gt; F["backtrack.py\nbuild_factory_index()"]
+    E --&gt; G["alert.py\npw.io.subscribe\nattribute_event()"]
+    F --&gt; G
+    G --&gt; H["evidence_log.jsonl\nappend-only audit trail"]
+    H --&gt; I["app.py\nStreamlit dashboard"]
+    C --&gt; J["anti_cheat.py\nrun_all_detectors()"]
+    J --&gt; K["tamper_log.jsonl\nzero-variance · blackout · dilution"]
+    K --&gt; I</code></pre>
 <h2 id="data-flow-attribution">Data Flow: Attribution</h2>
 <pre class="mermaid"><code>flowchart LR
-    A["CETP spike detected at T"] --&gt; B["T_backtrack = T − 15 min"]
-    B --&gt; C["Scan factory_index\nfor rows within ±2 min"]
-    C --&gt; D{"Any matches?"}
+    A["CETP spike at T"] --&gt; B["T_backtrack = T − 15 min"]
+    B --&gt; C["Search factory_index\nfor rows within ±2 min"]
+    C --&gt; D{"Matches found?"}
     D -- Yes --&gt; E["Select MAX cod row\n→ attributed_factory"]
     D -- No --&gt; F["attributed_factory = None"]
     E --&gt; G["Append to\nevidence_log.jsonl"]
     F --&gt; G</code></pre>
+<h2 id="anti-cheat-detection-flow">Anti-Cheat Detection Flow</h2>
+<pre class="mermaid"><code>flowchart TD
+    A["factory_*.csv\n75,124 rows · 4 factories"] --&gt; B["_load_factories()\npandas DataFrame"]
+    B --&gt; C["detect_zero_variance()\n5-min tumbling windows\nmax−min &lt; 1e-4"]
+    B --&gt; D["detect_chemical_fingerprint()\n60-min windows\nCOD drop ≥80% AND TSS stable"]
+    B --&gt; E["detect_guilt_by_disconnection()\n10-min windows\nnull ratio ≥ 80%"]
+    C --&gt; F["ZERO_VARIANCE\n2,439 events\nFACTORY_C"]
+    D --&gt; G["DILUTION_TAMPER\nlogic active"]
+    E --&gt; H["BLACKOUT_TAMPER\n125 events\nFACTORY_D"]
+    F --&gt; I["tamper_log.jsonl"]
+    G --&gt; I
+    H --&gt; I</code></pre>
 <h2 id="streaming-design">Streaming Design</h2>
 <pre class="mermaid"><code>flowchart LR
     subgraph Pathway["Pathway Streaming Graph"]
-        P1["pw.io.csv.read\nmode=streaming\nCETP CSV"] --&gt; P2["tripwire filter\ncod &gt;= threshold"]
+        P1["pw.io.csv.read\nmode=streaming"] --&gt; P2["tripwire filter\ncod &gt;= threshold"]
         P2 --&gt; P3["pw.io.subscribe\ncallback"]
     end
 
-    subgraph Pandas["Pandas (Eager, Static)"]
-        Q1["build_factory_index()\nloads all factory CSVs once"] --&gt; Q2["attribute_event()\nfor each shock event"]
+    subgraph Pandas["Pandas Eager Lookup"]
+        Q1["build_factory_index()\nloaded once at startup"] --&gt; Q2["attribute_event()\nnear-timestamp search"]
     end
 
     P3 --&gt; Q2
@@ -658,17 +683,12 @@
 <tbody>
 <tr>
 <td><code>simulate_factories.py</code></td>
-<td>Generate 4 test factory CSVs from CETP timeline</td>
+<td>Generate 4 factory CSVs from CETP timeline</td>
 <td><code>data/factories/</code>, <code>data/cetp/cetp_clean.csv</code></td>
 </tr>
 <tr>
 <td><code>ingest.py</code></td>
-<td>Pathway streaming read, MPCB column rename, NA/BLACKOUT tagging</td>
-<td><code>pw.Table</code> (CETP + factory)</td>
-</tr>
-<tr>
-<td><code>aggregate.py</code></td>
-<td>Convenience wrapper to unify factory stream</td>
+<td>Pathway streaming read, MPCB column rename, BLACKOUT tagging</td>
 <td><code>pw.Table</code></td>
 </tr>
 <tr>
@@ -683,12 +703,22 @@
 </tr>
 <tr>
 <td><code>alert.py</code></td>
-<td><code>pw.io.subscribe</code> callback: runs backtrack, writes JSONL, fires webhook</td>
+<td><code>pw.io.subscribe</code> callback: runs backtrack, writes JSONL</td>
 <td><code>evidence_log.jsonl</code></td>
 </tr>
 <tr>
 <td><code>anti_cheat.py</code></td>
-<td>Pandas tumbling-window: zero-variance, fingerprint, blackout detection</td>
+<td>Pandas tumbling-window: zero-variance, fingerprint, blackout</td>
+<td><code>tamper_log.jsonl</code></td>
+</tr>
+<tr>
+<td><code>run_pipeline.py</code></td>
+<td>Entry point: wires CETP stream → tripwire → alert</td>
+<td>runs <code>pw.run()</code></td>
+</tr>
+<tr>
+<td><code>run_anticheat.py</code></td>
+<td>Entry point: runs all 3 detectors once, writes tamper log</td>
 <td><code>tamper_log.jsonl</code></td>
 </tr>
 <tr>
@@ -698,7 +728,7 @@
 </tr>
 <tr>
 <td><code>app.py</code></td>
-<td>Streamlit dashboard</td>
+<td>Streamlit dashboard — attribution log + tamper events</td>
 <td>UI</td>
 </tr>
 <tr>

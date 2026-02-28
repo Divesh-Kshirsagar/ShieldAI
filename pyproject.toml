@@ -15,4 +15,6 @@ dependencies = [
     "scikit-learn>=1.6.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.28.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.3",
 ]

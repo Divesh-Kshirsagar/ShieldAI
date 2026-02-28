@@ -2,36 +2,47 @@
 
 ## System Overview
 
+```mermaid
+flowchart TD
+    A["priya_cetp_i.csv (real)"] --> B["ingest.py\nMPCB col rename\nNA → null float"]
+    C["factory_A/B/C/D.csv (simulated)"] --> D["ingest.py\nNA → BLACKOUT"]
+    B --> E["tripwire.py\nCOD ≥ threshold\n→ shock_events"]
+    D --> F["aggregate.py\nunified stream"]
+    F --> G["backtrack.py\nbuild_factory_index()"]
+    E --> H["alert.py\npw.io.subscribe callback\nattribute_event()"]
+    G --> H
+    H --> I["evidence_log.jsonl\nappend-only"]
+    I --> J["app.py\nStreamlit dashboard"]
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  DATA SOURCES                                                   │
-│  priya_cetp_i.csv (real)   factory_A/B/C/D.csv (simulated)     │
-└────────────────────┬─────────────────────────┬─────────────────┘
-                     │                         │
-             ┌───────▼───────┐         ┌───────▼───────┐
-             │   ingest.py   │         │   ingest.py   │
-             │ MPCB col rename│        │ NA → BLACKOUT │
-             │ NA → null float│        └───────┬───────┘
-             └───────┬───────┘                 │
-                     │                         │
-             ┌───────▼───────┐         ┌───────▼───────┐
-             │  tripwire.py  │         │  aggregate.py │
-             │ COD ≥ threshold│        │ unified stream │
-             │ → shock_events │        └───────┬───────┘
-             └───────┬───────┘                 │
-                     │                         │
-             ┌───────▼─────────────────────────▼───────┐
-             │                alert.py                  │
-             │  pw.io.subscribe callback:                │
-             │    backtrack.attribute_event()           │
-             │    → evidence_log.jsonl (append-only)    │
-             └───────────────────┬──────────────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │        app.py           │
-                    │    Streamlit dashboard  │
-                    │  (reads JSONL + CSVs)   │
-                    └─────────────────────────┘
+
+## Data Flow: Attribution
+
+```mermaid
+flowchart LR
+    A["CETP spike detected at T"] --> B["T_backtrack = T − 15 min"]
+    B --> C["Scan factory_index\nfor rows within ±2 min"]
+    C --> D{"Any matches?"}
+    D -- Yes --> E["Select MAX cod row\n→ attributed_factory"]
+    D -- No --> F["attributed_factory = None"]
+    E --> G["Append to\nevidence_log.jsonl"]
+    F --> G
+```
+
+## Streaming Design
+
+```mermaid
+flowchart LR
+    subgraph Pathway["Pathway Streaming Graph"]
+        P1["pw.io.csv.read\nmode=streaming\nCETP CSV"] --> P2["tripwire filter\ncod >= threshold"]
+        P2 --> P3["pw.io.subscribe\ncallback"]
+    end
+
+    subgraph Pandas["Pandas (Eager, Static)"]
+        Q1["build_factory_index()\nloads all factory CSVs once"] --> Q2["attribute_event()\nfor each shock event"]
+    end
+
+    P3 --> Q2
+    Q2 --> R["evidence_log.jsonl"]
 ```
 
 ## Module Responsibilities
@@ -44,36 +55,7 @@
 | `tripwire.py` | COD threshold filter → shock events | `pw.Table` (shock_events) |
 | `backtrack.py` | Pandas factory index + nearest-timestamp attribution | `dict` (evidence record) |
 | `alert.py` | `pw.io.subscribe` callback: runs backtrack, writes JSONL, fires webhook | `evidence_log.jsonl` |
-| `anti_cheat.py` | v2 stubs: zero-variance, fingerprint, blackout detection | `pw.Table` (tamper_events) |
+| `anti_cheat.py` | Pandas tumbling-window: zero-variance, fingerprint, blackout detection | `tamper_log.jsonl` |
 | `api.py` | FastAPI stub of MPCB Open API v2.3 (8 endpoints) | REST API |
 | `app.py` | Streamlit dashboard | UI |
 | `constants.py` | Single source of truth for all tuneable parameters | — |
-
-## Data Flow: Attribution
-
-```
-CETP spike detected at T
-        │
-        ▼
-T_backtrack = T − PIPE_TRAVEL_MINUTES (15 min)
-        │
-        ▼
-Scan factory_index for rows where
-  T_backtrack − 2min ≤ factory.time ≤ T_backtrack + 2min
-        │
-        ▼
-Select row with MAX(factory.cod)
-        │
-        ▼
-Emit evidence record → evidence_log.jsonl
-```
-
-## Streaming Design
-
-SHIELD AI uses **Pathway** as the streaming engine for the CETP side:
-
-- `pw.io.csv.read(..., mode="streaming")` tails the CETP CSV like a live sensor feed
-- `pw.io.subscribe()` fires a Python callback for every new shock event
-- The callback performs attribution via a pre-loaded pandas DataFrame (fast, deterministic)
-
-Factory data is loaded eagerly as a static pandas index because factory CSVs are historical files, not live feeds. In a live deployment with MPCB-connected sensors for each factory, the join would move into Pathway using `pw.temporal.asof_join_left` on a merged stream (see `backtrack.py` for the upgrade path).

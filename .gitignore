@@ -1,0 +1,14 @@
+# Pathway
+pathway/
+
+# Data
+data/
+
+# Temporary
+.venv
+site/
+
+# IDE
+.idea
+.vscode
+

@@ -307,25 +307,6 @@
   
 
       
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="../MpcbApi/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  API Reference
-
-      </a>
-    </li>
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -614,33 +595,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../MpcbApi/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    API Reference
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -660,41 +614,38 @@
 
 <h1 id="architecture">Architecture</h1>
 <h2 id="system-overview">System Overview</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart TD
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    A[&quot;priya_cetp_i.csv (real)&quot;] --&gt; B[&quot;ingest.py\nMPCB col rename\nNA → null float&quot;]
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    C[&quot;factory_A/B/C/D.csv (simulated)&quot;] --&gt; D[&quot;ingest.py\nNA → BLACKOUT&quot;]
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    B --&gt; E[&quot;tripwire.py\nCOD ≥ threshold\n→ shock_events&quot;]
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    D --&gt; F[&quot;aggregate.py\nunified stream&quot;]
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    F --&gt; G[&quot;backtrack.py\nbuild_factory_index()&quot;]
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    E --&gt; H[&quot;alert.py\npw.io.subscribe callback\nattribute_event()&quot;]
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    G --&gt; H
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    H --&gt; I[&quot;evidence_log.jsonl\nappend-only&quot;]
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    I --&gt; J[&quot;app.py\nStreamlit dashboard&quot;]
-</code></pre></div>
+<pre class="mermaid"><code>flowchart TD
+    A["priya_cetp_i.csv (real)"] --&gt; B["ingest.py\nMPCB col rename\nNA → null float"]
+    C["factory_A/B/C/D.csv (simulated)"] --&gt; D["ingest.py\nNA → BLACKOUT"]
+    B --&gt; E["tripwire.py\nCOD ≥ threshold\n→ shock_events"]
+    D --&gt; F["aggregate.py\nunified stream"]
+    F --&gt; G["backtrack.py\nbuild_factory_index()"]
+    E --&gt; H["alert.py\npw.io.subscribe callback\nattribute_event()"]
+    G --&gt; H
+    H --&gt; I["evidence_log.jsonl\nappend-only"]
+    I --&gt; J["app.py\nStreamlit dashboard"]</code></pre>
 <h2 id="data-flow-attribution">Data Flow: Attribution</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>flowchart LR
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    A[&quot;CETP spike detected at T&quot;] --&gt; B[&quot;T_backtrack = T − 15 min&quot;]
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    B --&gt; C[&quot;Scan factory_index\nfor rows within ±2 min&quot;]
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    C --&gt; D{&quot;Any matches?&quot;}
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    D -- Yes --&gt; E[&quot;Select MAX cod row\n→ attributed_factory&quot;]
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    D -- No --&gt; F[&quot;attributed_factory = None&quot;]
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    E --&gt; G[&quot;Append to\nevidence_log.jsonl&quot;]
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    F --&gt; G
-</code></pre></div>
+<pre class="mermaid"><code>flowchart LR
+    A["CETP spike detected at T"] --&gt; B["T_backtrack = T − 15 min"]
+    B --&gt; C["Scan factory_index\nfor rows within ±2 min"]
+    C --&gt; D{"Any matches?"}
+    D -- Yes --&gt; E["Select MAX cod row\n→ attributed_factory"]
+    D -- No --&gt; F["attributed_factory = None"]
+    E --&gt; G["Append to\nevidence_log.jsonl"]
+    F --&gt; G</code></pre>
 <h2 id="streaming-design">Streaming Design</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>flowchart LR
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    subgraph Pathway[&quot;Pathway Streaming Graph&quot;]
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>        P1[&quot;pw.io.csv.read\nmode=streaming\nCETP CSV&quot;] --&gt; P2[&quot;tripwire filter\ncod &gt;= threshold&quot;]
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>        P2 --&gt; P3[&quot;pw.io.subscribe\ncallback&quot;]
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    end
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    subgraph Pandas[&quot;Pandas (Eager, Static)&quot;]
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>        Q1[&quot;build_factory_index()\nloads all factory CSVs once&quot;] --&gt; Q2[&quot;attribute_event()\nfor each shock event&quot;]
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    end
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    P3 --&gt; Q2
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    Q2 --&gt; R[&quot;evidence_log.jsonl&quot;]
-</code></pre></div>
+<pre class="mermaid"><code>flowchart LR
+    subgraph Pathway["Pathway Streaming Graph"]
+        P1["pw.io.csv.read\nmode=streaming\nCETP CSV"] --&gt; P2["tripwire filter\ncod &gt;= threshold"]
+        P2 --&gt; P3["pw.io.subscribe\ncallback"]
+    end
+
+    subgraph Pandas["Pandas (Eager, Static)"]
+        Q1["build_factory_index()\nloads all factory CSVs once"] --&gt; Q2["attribute_event()\nfor each shock event"]
+    end
+
+    P3 --&gt; Q2
+    Q2 --&gt; R["evidence_log.jsonl"]</code></pre>
 <h2 id="module-responsibilities">Module Responsibilities</h2>
 <table>
 <thead>
@@ -812,6 +763,8 @@
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
       
     
   </body>

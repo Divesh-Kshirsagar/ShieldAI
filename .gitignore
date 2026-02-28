@@ -12,3 +12,5 @@ site/
 .idea
 .vscode
 
+
+*/__pycache__

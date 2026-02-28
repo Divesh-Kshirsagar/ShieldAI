@@ -24,6 +24,9 @@ FACTORY_DATA_DIR: str = os.getenv("FACTORY_DATA_DIR", "data/factories")
 # Alert evidence log (append-only JSONL)
 ALERT_LOG_PATH: str = os.getenv("ALERT_LOG_PATH", "data/alerts/evidence_log.jsonl")
 
+# v2 Anti-cheat tamper log (append-only JSONL)
+TAMPER_LOG_PATH: str = os.getenv("TAMPER_LOG_PATH", "data/alerts/tamper_log.jsonl")
+
 # ---------------------------------------------------------------------------
 # Anomaly detection thresholds (tripwire.py)
 # ---------------------------------------------------------------------------
@@ -62,6 +65,9 @@ ZERO_VARIANCE_MINUTES: int = int(os.getenv("ZERO_VARIANCE_MINUTES", "5"))
 # while TSS stays within TSS_STABLE_FRACTION of its prior value
 COD_DROP_FRACTION: float = float(os.getenv("COD_DROP_FRACTION", "0.80"))
 TSS_STABLE_FRACTION: float = float(os.getenv("TSS_STABLE_FRACTION", "0.20"))
+
+# Minimum blackout window length to trigger guilt-by-disconnection alarm (minutes)
+BLACKOUT_MIN_MINUTES: int = int(os.getenv("BLACKOUT_MIN_MINUTES", "10"))
 
 # ---------------------------------------------------------------------------
 # Integrations

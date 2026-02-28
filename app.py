@@ -370,6 +370,91 @@ if evidence:
             )
 
 
+# ── Row 5: Tamper Events (Phase 4 Anti-Cheat) ────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-title">🕵️ Tamper Detection Log (Phase 4)</div>', unsafe_allow_html=True)
+
+from src.constants import TAMPER_LOG_PATH
+
+@st.cache_data(ttl=30)
+def load_tamper() -> list[dict]:
+    p = Path(TAMPER_LOG_PATH)
+    if not p.exists():
+        return []
+    try:
+        return [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()]
+    except Exception:
+        return []
+
+tamper_recs = load_tamper()
+
+TAMPER_BADGE = {
+    "ZERO_VARIANCE":  ("🟡", "#e3b341", "#e3b34120"),
+    "DILUTION_TAMPER":("🟠", "#f0883e", "#f0883e20"),
+    "BLACKOUT_TAMPER":("🔴", "#f85149", "#f8514920"),
+}
+
+if not tamper_recs:
+    tamper_left, tamper_right = st.columns([2, 1])
+    with tamper_left:
+        st.info(
+            "No tamper records yet.\n\n"
+            "**Run the anti-cheat engine:**\n```\nuv run python src/run_anticheat.py\n```"
+        )
+else:
+    from collections import Counter as _Counter
+    tamper_counts = _Counter(r.get("tamper_type") for r in tamper_recs)
+    t1, t2, t3 = st.columns(3)
+    t1.metric("🟡 Zero-Variance", tamper_counts.get("ZERO_VARIANCE", 0))
+    t2.metric("🟠 Dilution Tamper", tamper_counts.get("DILUTION_TAMPER", 0))
+    t3.metric("🔴 Blackout Tamper", tamper_counts.get("BLACKOUT_TAMPER", 0))
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Show most recent 15 tamper events
+    for rec in reversed(tamper_recs[-15:]):
+        ttype   = rec.get("tamper_type", "UNKNOWN")
+        fid     = rec.get("factory_id", "?")
+        wend    = rec.get("window_end", "—")
+        icon, color, bg = TAMPER_BADGE.get(ttype, ("⚪", "#8b949e", "#30363d"))
+
+        # Build detail string based on type
+        if ttype == "ZERO_VARIANCE":
+            detail = f"COD locked @ {rec.get('cod_max', '?')} mg/L  (range = {rec.get('cod_range', '?')})"
+        elif ttype == "DILUTION_TAMPER":
+            detail = f"COD dropped to {rec.get('mean_cod', '?')} mg/L (baseline {rec.get('baseline_cod', '?')}) | TSS {rec.get('mean_tss', '?')}"
+        elif ttype == "BLACKOUT_TAMPER":
+            ratio_pct = int(float(rec.get("blackout_ratio", 0)) * 100)
+            detail = f"{ratio_pct}% null readings  ({rec.get('blackout_rows', '?')} / {rec.get('total_rows', '?')} rows)"
+        else:
+            detail = str(rec)
+
+        st.markdown(f"""
+<div style="background:{bg};border:1px solid {color}40;border-left:4px solid {color};
+border-radius:6px;padding:0.6rem 1rem;margin-bottom:0.4rem;
+display:flex;align-items:center;gap:1rem;font-size:0.83rem;">
+  <span style="font-size:1.1rem;">{icon}</span>
+  <div>
+    <span style="color:{color};font-weight:600;">{ttype}</span>
+    <span style="color:#8b949e;margin:0 0.5rem;">|</span>
+    <span style="font-family:'JetBrains Mono',monospace;color:#79c0ff;">{fid}</span>
+    <span style="color:#8b949e;margin:0 0.5rem;">|</span>
+    <span style="color:#8b949e;">{wend}</span>
+  </div>
+  <div style="margin-left:auto;color:#8b949e;font-size:0.78rem;text-align:right;">{detail}</div>
+</div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+    if Path(TAMPER_LOG_PATH).exists():
+        st.download_button(
+            label="📥 Download tamper_log.jsonl",
+            data=Path(TAMPER_LOG_PATH).read_bytes(),
+            file_name="tamper_log.jsonl",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+
 # ── Footer / auto-refresh ─────────────────────────────────────────────────────
 st.markdown("---")
 st.caption(

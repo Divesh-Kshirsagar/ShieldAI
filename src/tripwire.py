@@ -17,7 +17,10 @@ Usage
 
 import pathway as pw
 
-from src.constants import COD_BASELINE, COD_THRESHOLD
+from src.config import CONFIG as _cfg
+
+_COD_BASELINE:  float = _cfg.cod_baseline
+_COD_THRESHOLD: float = _cfg.cod_threshold
 
 
 def detect_anomalies(cetp_stream: pw.Table) -> pw.Table:
@@ -37,18 +40,18 @@ def detect_anomalies(cetp_stream: pw.Table) -> pw.Table:
             breach_mag  (float) — COD minus COD_BASELINE (positive = above baseline)
             alert_level (str)   — "HIGH" (>=2× baseline) or "MEDIUM"
     """
-    # NOTE: COD_THRESHOLD and COD_BASELINE are from constants.py so adjusting
+    # NOTE: _COD_THRESHOLD and _COD_BASELINE come from config.CONFIG so adjusting
     # them there propagates everywhere without touching this logic.
     shock_events: pw.Table = (
         cetp_stream
         # Step 1 — The Tripwire filter
-        .filter(pw.this.cetp_inlet_cod >= COD_THRESHOLD)
+        .filter(pw.this.cetp_inlet_cod >= _COD_THRESHOLD)
         # Step 2 — Enrich with breach metadata
         .with_columns(
             cod_value   = pw.this.cetp_inlet_cod,
-            breach_mag  = pw.this.cetp_inlet_cod - COD_BASELINE,
+            breach_mag  = pw.this.cetp_inlet_cod - _COD_BASELINE,
             alert_level = pw.if_else(
-                pw.this.cetp_inlet_cod >= COD_BASELINE * 2,
+                pw.this.cetp_inlet_cod >= _COD_BASELINE * 2,
                 "HIGH",
                 "MEDIUM",
             ),

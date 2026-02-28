@@ -12,6 +12,29 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# Z-score anomaly scoring (zscore.py)
+# ---------------------------------------------------------------------------
+
+# NOTE: These are read by zscore.py to populate its CONFIG dict.
+# Override via env vars to tune without touching code.
+
+# Width of the trailing sliding window used to compute per-channel rolling stats.
+WINDOW_SECONDS: int = int(os.getenv("WINDOW_SECONDS", "300"))  # 5 minutes
+
+# Readings with |z-score| above this value are flagged as anomalous.
+ZSCORE_THRESHOLD: float = float(os.getenv("ZSCORE_THRESHOLD", "3.0"))  # σ units
+
+# Small floor added to rolling_std before division to prevent zero-division.
+EPSILON: float = float(os.getenv("EPSILON", "1e-9"))
+
+# ---------------------------------------------------------------------------
+# Persistence filter (persistence.py)
+# ---------------------------------------------------------------------------
+
+# Number of consecutive anomalous readings required before emitting a confirmed alert.
+PERSISTENCE_COUNT: int = int(os.getenv("PERSISTENCE_COUNT", "3"))
+
+# ---------------------------------------------------------------------------
 # Pathway I/O
 # ---------------------------------------------------------------------------
 

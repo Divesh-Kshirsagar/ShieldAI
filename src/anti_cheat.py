@@ -32,19 +32,22 @@ Usage
     tamper_records = run_all_detectors()     # returns list of dicts
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from src.constants import (
-    BLACKOUT_MIN_MINUTES,
-    COD_DROP_FRACTION,
-    FACTORY_DATA_DIR,
-    TSS_STABLE_FRACTION,
-    ZERO_VARIANCE_MINUTES,
-)
+from src.config import CONFIG as _cfg
+
+log = logging.getLogger(__name__)
+
+_BLACKOUT_MIN_MINUTES: int   = _cfg.blackout_min_minutes
+_COD_DROP_FRACTION:    float = _cfg.cod_drop_fraction
+_FACTORY_DATA_DIR:     str   = _cfg.factory_data_directory
+_TSS_STABLE_FRACTION:  float = _cfg.tss_stable_fraction
+_ZERO_VARIANCE_MINUTES: int  = _cfg.zero_variance_minutes
 
 TINY_EPS = 1e-4  # |max - min| below this value = declared zero-variance
 
@@ -53,7 +56,7 @@ TINY_EPS = 1e-4  # |max - min| below this value = declared zero-variance
 # Loader
 # ---------------------------------------------------------------------------
 
-def _load_factories(factory_dir: str = FACTORY_DATA_DIR) -> pd.DataFrame:
+def _load_factories(factory_dir: str = _FACTORY_DATA_DIR) -> pd.DataFrame:
     """Load all factory CSVs into a single DataFrame with parsed timestamps."""
     dfs = []
     for p in sorted(Path(factory_dir).glob("factory_*.csv")):
@@ -73,7 +76,7 @@ def _load_factories(factory_dir: str = FACTORY_DATA_DIR) -> pd.DataFrame:
 
 def detect_zero_variance(
     df: pd.DataFrame,
-    window_minutes: int = ZERO_VARIANCE_MINUTES,
+    window_minutes: int = _ZERO_VARIANCE_MINUTES,
 ) -> list[dict]:
     """Flag factories reporting a perfectly flat/frozen COD reading.
 
@@ -128,8 +131,8 @@ def detect_zero_variance(
 def detect_chemical_fingerprint(
     df: pd.DataFrame,
     window_minutes: int = 60,
-    cod_drop: float = COD_DROP_FRACTION,
-    tss_stable: float = TSS_STABLE_FRACTION,
+    cod_drop: float = _COD_DROP_FRACTION,
+    tss_stable: float = _TSS_STABLE_FRACTION,
 ) -> list[dict]:
     """Flag dilution tampering: COD drops sharply while TSS stays stable.
 
@@ -197,7 +200,7 @@ def detect_chemical_fingerprint(
 
 def detect_guilt_by_disconnection(
     df: pd.DataFrame,
-    window_minutes: int = BLACKOUT_MIN_MINUTES,
+    window_minutes: int = _BLACKOUT_MIN_MINUTES,
     blackout_threshold: float = 0.80,
 ) -> list[dict]:
     """Flag strategic sensor blackouts (high ratio of NA/null COD rows).
@@ -255,7 +258,7 @@ def detect_guilt_by_disconnection(
 # Unified runner
 # ---------------------------------------------------------------------------
 
-def run_all_detectors(factory_dir: str = FACTORY_DATA_DIR) -> list[dict]:
+def run_all_detectors(factory_dir: str = _FACTORY_DATA_DIR) -> list[dict]:
     """Run all three anti-cheat detectors and return combined list of tamper records.
 
     Args:
@@ -265,7 +268,10 @@ def run_all_detectors(factory_dir: str = FACTORY_DATA_DIR) -> list[dict]:
         List of tamper dicts (combined from all 3 detectors), sorted by window_end.
     """
     df = _load_factories(factory_dir)
-    print(f"  [ANTI-CHEAT] Loaded {len(df):,} factory rows from {df['factory_id'].nunique()} factories")
+    log.info(
+        "config loaded",
+        extra={"factory_rows": len(df), "factories": df['factory_id'].nunique()},
+    )
 
     zv  = detect_zero_variance(df)
     fp  = detect_chemical_fingerprint(df)

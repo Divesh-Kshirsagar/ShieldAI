@@ -18,11 +18,13 @@ Usage
 import pathway as pw
 
 from src.ingest import load_factory_streams, load_clean_factory_stream
-from src.constants import FACTORY_DATA_DIR
+from src.config import CONFIG as _cfg
+
+_FACTORY_DATA_DIR: str = _cfg.factory_data_directory
 
 
 def build_industrial_stream(
-    factory_dir: str = FACTORY_DATA_DIR,
+    factory_dir: str = _FACTORY_DATA_DIR,
     include_blackout: bool = False,
 ) -> pw.Table:
     """Build the unified Industrial Discharge Stream from all factory CSVs.

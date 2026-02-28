@@ -45,7 +45,11 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.constants import CETP_DATA_DIR, FACTORY_DATA_DIR, PIPE_TRAVEL_MINUTES
+from src.config import CONFIG as _cfg
+
+_CETP_DATA_DIR:      str = _cfg.cetp_data_directory
+_FACTORY_DATA_DIR:   str = _cfg.factory_data_directory
+_PIPE_TRAVEL_MINUTES: int = _cfg.pipe_travel_minutes
 
 # ---------------------------------------------------------------------------
 # Constants used only by the simulator
@@ -240,7 +244,7 @@ def _save(df: pd.DataFrame, out_dir: str, filename: str) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def simulate(cetp_dir: str = CETP_DATA_DIR, out_dir: str = FACTORY_DATA_DIR) -> None:
+def simulate(cetp_dir: str = _CETP_DATA_DIR, out_dir: str = _FACTORY_DATA_DIR) -> None:
     """Generate all 4 simulated factory CSVs and the preprocessed CETP CSV.
 
     Args:
@@ -253,7 +257,7 @@ def simulate(cetp_dir: str = CETP_DATA_DIR, out_dir: str = FACTORY_DATA_DIR) -> 
     print("SHIELD AI — Simulating factory data")
     print(f"  Source CETP dir : {cetp_dir}")
     print(f"  Output dir      : {out_dir}")
-    print(f"  Pipe travel time: {PIPE_TRAVEL_MINUTES} min\n")
+    print(f"  Pipe travel time: {_PIPE_TRAVEL_MINUTES} min\n")
 
     # Step 0: Preprocess CETP CSV (rename raw MPCB headers → clean schema names)
     print("[0/5] Preprocessing CETP CSV (Pathway-compatible headers)...")
@@ -268,7 +272,7 @@ def simulate(cetp_dir: str = CETP_DATA_DIR, out_dir: str = FACTORY_DATA_DIR) -> 
     # factory_B — shock-load
     print("[3/5] Generating factory_B (shock-load)...")
     fb = _base_factory_df(timeline, "FACTORY_B", rng)
-    fb = _inject_shock(fb, KNOWN_CETP_SPIKE_TIMES, PIPE_TRAVEL_MINUTES, rng)
+    fb = _inject_shock(fb, KNOWN_CETP_SPIKE_TIMES, _PIPE_TRAVEL_MINUTES, rng)
     _save(fb, out_dir, "factory_B.csv")
     print()
 
@@ -282,7 +286,7 @@ def simulate(cetp_dir: str = CETP_DATA_DIR, out_dir: str = FACTORY_DATA_DIR) -> 
     # factory_D — blackout
     print("[5/5] Generating factory_D (blackout)...")
     fd = _base_factory_df(timeline, "FACTORY_D", rng)
-    fd = _inject_blackout(fd, KNOWN_CETP_SPIKE_TIMES, PIPE_TRAVEL_MINUTES)
+    fd = _inject_blackout(fd, KNOWN_CETP_SPIKE_TIMES, _PIPE_TRAVEL_MINUTES)
     _save(fd, out_dir, "factory_D.csv")
 
     print("\n✅  All CSVs ready. Run the Pathway pipeline next.")

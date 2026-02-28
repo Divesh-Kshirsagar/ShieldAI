@@ -18,13 +18,15 @@ from typing import Any
 
 import pathway as pw
 
-from src.constants import TAMPER_LOG_PATH
+from src.config import CONFIG as _cfg
+
+_TAMPER_LOG_PATH: str = _cfg.tamper_log_path
 
 
 def _write_tamper(record: dict) -> None:
     """Append one tamper record to the tamper JSONL log."""
-    Path(TAMPER_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with open(TAMPER_LOG_PATH, "a", encoding="utf-8") as f:
+    Path(_TAMPER_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+    with open(_TAMPER_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
     print(
         f"[TAMPER] {record['tamper_type']} | "

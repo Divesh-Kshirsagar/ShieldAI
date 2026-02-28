@@ -1,105 +1,143 @@
-# SHIELD AI
+# Industrial Discharge Anomaly Detection System
+Monitors industrial wastewater streams live to catch toxic dumps before they hit the river.
 
-**Real-time industrial discharge anomaly detection for CETP (Common Effluent Treatment Plant) compliance monitoring.**
-
-SHIELD AI ingests 1-minute frequency sensor streams, detects COD shock-load events at the CETP inlet, reverse-temporally joins the factory discharge streams to pinpoint the rogue factory, and surfaces evidence via a Streamlit dashboard and an un-falsifiable JSONL audit log.
+![Python](https://img.shields.io/badge/python-3.9+-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Pathway](https://img.shields.io/badge/built%20with-Pathway-orange)
 
 ---
 
-## Quick Start
+## The Problem
+Factories dump wastewater into treatment plants around the clock. Without live monitoring, a massive chemical dump goes unnoticed until it kills the bacteria in the treatment plant. A five-minute delay means thousands of liters of toxic water pass the intake valves before anyone turns off the pumps. 
 
-```bash
-# 1. Install dependencies
-uv sync
+## What This Does
+* Watches sensor inputs continuously so nothing slips by.
+* Detects sudden changes using rolling math instead of fixed rules.
+* Filters out random sensor noise to stop false alarms.
+* Scores the danger level based on the specific river's health.
+* Alerts operators instantly when a real chemical threat emerges.
+* Explains exactly which sensor triggered the alarm.
+* Tracks system performance in the background for audits.
 
-# 2. Generate simulated factory data (run once)
-python src/simulate_factories.py
+## How Data Flows
 
-# 3. Start the Phase 1 attribution pipeline
-python src/run_pipeline.py
+```mermaid
+graph TD
+    classDef step1 fill:#1B3A5C,color:#fff
+    classDef step456 fill:#0D7A5C,color:#fff
+    classDef step8 fill:#8B5C00,color:#fff
+    classDef step9 fill:#8B1A1A,color:#fff
 
-# 4. In a second terminal, start the dashboard
-streamlit run app.py
+    s1[1. Pulling raw numbers from the pipes]:::step1
+    s2[2. Throwing out broken or missing readings]
+    s3[3. Figuring out the moving average and spread]
+    s4[4. Flagging values that stray too far from normal]:::step456
+    s5[5. Waiting for three strikes to confirm it is real]:::step456
+    s6[6. Combining all sensor scores into one danger metric]:::step456
+    s7[7. Blaming the specific sensor causing the problem]
+    s8[8. Weighing the danger against the river's local health]:::step8
+    s9[9. Firing alarms only if the risk is high enough]:::step9
+    s10[10. Saving the stats so we can prove it happened]
 
-# 5. (Optional) Start the MPCB API stub
-uvicorn src.api:app --reload
-# Swagger docs → http://localhost:8000/docs
+    s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7 --> s8 --> s9 --> s10
 ```
 
----
+This diagram shows how we turn messy water data into a reliable pager beep. Raw numbers enter at the top, get cleaned, scored, and finally pushed out as an alert if the math says it is a real threat.
+
+## The 3 Ideas That Make It Work
+
+### Idea 1 — Self-Calibrating Detection
+Water changes hour by hour. A fixed limit causes false alarms during rainstorms. This system uses a sliding window to figure out what normal looks like right now. It triggers when the current reading is violently different from the recent past.
+
+### Idea 2 — Multivariate Intelligence
+A tiny drop in pH might not matter alone. A tiny drop in pH while turbidity spikes is often a chemical dump. The system looks at all the sensors as a single group. This catches coordinated patterns that single-sensor math ignores.
+
+### Idea 3 — Environmental Risk Index
+The same chemical spill does different damage depending on where it happens. Pumping bad water into a dry river is worse than pumping it into a flooded one. This index scales the final alert score based on how fragile the receiving water is.
 
 ## Project Structure
-
-```
-shield_ai/
-├── data/
-│   ├── cetp/             # Real government CETP CSV data
-│   └── factories/        # Simulated factory streams (generated)
+```bash
+.
 ├── src/
-│   ├── constants.py      # All tuneable parameters
-│   ├── simulate_factories.py
-│   ├── ingest.py         # Pathway streaming reader + NA filter
-│   ├── aggregate.py      # Unified industrial discharge stream
-│   ├── tripwire.py       # COD anomaly detection
-│   ├── backtrack.py      # Temporal asof_join attribution
-│   ├── anti_cheat.py     # v2 tamper detection stubs
-│   ├── alert.py          # JSONL evidence log + webhook/email/PDF
-│   ├── api.py            # MPCB API v2.3 FastAPI stub
-│   └── run_pipeline.py   # Pathway pipeline entry point
-├── app.py                # Streamlit dashboard
-├── docs/                 # MkDocs documentation
-└── pyproject.toml
+│   ├── ingest.py         # Reads data from the message queue
+│   ├── validation.py     # Drops rows with missing or bad data
+│   ├── windowed_stats.py # Calculates rolling averages and spread
+│   ├── zscore.py         # Finds anomalies using math
+│   ├── persistence.py    # Stops single-tick false alarms
+│   ├── multivariate.py   # Combines sensors into one score
+│   ├── attribution.py    # Finds the worst broken sensor
+│   ├── eri.py            # Adjusts danger by river health
+│   ├── alerts.py         # Decides who gets paged right now
+│   ├── metrics.py        # Logs system latency and counts
+│   └── logger.py         # Standardizes our terminal output
+├── config.py             # All strict settings in one place
+├── demo_script.py        # Fake a whole incident end-to-end
+├── inject_anomaly.py     # Poke the system with bad data
+└── main.py               # Wires it all together and runs it
 ```
 
----
+## Getting Started
 
-## Configuration
+Step 1 — Install dependencies  
+`pip install -r requirements.txt`
 
-All tuneable parameters live in `src/constants.py` and can be overridden via environment variables (`.env` file supported):
+Step 2 — Configure  
+Open `config.py` and set your defaults. The most important settings for a new user are `ZSCORE_THRESHOLD`, `WINDOW_SECONDS`, and `PERSISTENCE_COUNT`.
 
-| Variable | Default | Description |
+Step 3 — Run  
+```bash
+# Start the pipeline
+python main.py
+
+# Run the full demo (fast mode = compressed timing)
+python demo_script.py --fast
+
+# Manually fire a test anomaly
+python inject_anomaly.py --sensor-id pH --anomaly-type spike
+```
+
+## Configuration Quick Reference
+
+| Parameter | Default | What it controls |
 |---|---|---|
-| `COD_BASELINE` | 193.0 | Empirical CETP COD mean (mg/L) |
-| `COD_THRESHOLD` | 250.0 | Shock-load trigger threshold (mg/L) |
-| `PIPE_TRAVEL_MINUTES` | 15 | Factory→CETP pipe travel time |
-| `SHIELD_WEBHOOK_URL` | *(blank)* | Alert webhook endpoint |
+| ZSCORE_THRESHOLD | 3.0 | How sensitive anomaly detection is |
+| PERSISTENCE_COUNT | 3 | How many hits before confirming an anomaly |
+| ALERT_MIN_RISK_BAND | MEDIUM | Minimum severity level to send an alert |
+| WINDOW_SECONDS | 300 | How far back rolling stats look |
+| RIVER_SENSITIVITY | per-point | How fragile the receiving ecosystem is |
 
----
+All parameters live in `config.py` and validate on startup to prevent silent crashes.
 
-## Data
+## Sample Alert Output
 
-| File | Status | Description |
-|---|---|---|
-| `data/cetp/priya_cetp_i.csv` | **Real** | CETP inlet/outlet sensor, Feb 2026, 18 K rows |
-| `data/factories/factory_A.csv` | Simulated | Normal baseline factory |
-| `data/factories/factory_B.csv` | Simulated | Shock-load event (tests Phase 1 attribution) |
-| `data/factories/factory_C.csv` | Simulated | Zero-variance COD (tests v2 digital tampering alarm) |
-| `data/factories/factory_D.csv` | Simulated | Blackout window (tests v2 guilt-by-disconnection) |
+```json
+{
+  "sensor_id": "outfall_4",             # The specific meter that tripped the wire
+  "timestamp": "2026-02-28T12:00:00Z",  # When the bad water actually hit the sensor
+  "z_score": 4.12,                      # How many standard deviations off normal we are
+  "composite_score": 18.5,              # Total combined weirdness from the sensor group
+  "eri": 8.9,                           # Environmental Risk Index score out of 10
+  "risk_band": "HIGH",                  # The category deciding who gets woken up
+  "alert_level": "CRITICAL",            # The severity level for the actual pager message
+  "top_contributor": "turbidity",       # The metric causing the most trouble right now
+  "alert_message": "Sharp pH drop",     # Human-readable explanation of why we care
+  "latency_ms": 42                      # How long it took the code to figure this out
+}
+```
 
----
+An operator looks at the top contributor and the message, then immediately calls the factory floor to stop the pumps.
 
-## Phases
+## Why Pathway
 
-| Phase | Status | Description |
-|---|---|---|
-| Phase 0 | ✅ | Data simulation |
-| Phase 1 | ✅ | Core engine (ingest → tripwire → backtrack → alert) |
-| Phase 2 | ✅ | Streamlit dashboard + MPCB API stub |
-| Phase 3 | 🔲 | Polish, email/PDF reports, MkDocs |
-| Phase 4 (v2) | 🔲 | Anti-cheating mechanisms |
+This codebase needs to handle data that arrives late or out of order. A simple Python loop cannot handle sliding windows over out-of-order streams without a ton of messy state management. Pathway handles the incremental recomputations automatically under the hood. It makes streaming joins actually bearable to write. The functional syntax takes a day or two to fully wrap your head around, but it deletes hundreds of lines of boilerplate code.
 
----
+## Known Limitations
 
-## Tech Stack
+* No unit test suite (the code is written to be testable, but tests aren't there yet)
+* Single-node only — no fault tolerance if pipeline crashes
+* Slow sensor drift can slip past z-score detection if it moves gradually enough
 
-- [Pathway](https://pathway.com) — streaming data engine
-- [Pandas / NumPy](https://pandas.pydata.org) — data wrangling
-- [Streamlit](https://streamlit.io) — dashboard
-- [FastAPI](https://fastapi.tiangolo.com) — MPCB API stub
-- [MkDocs](https://www.mkdocs.org) — documentation
+If I had another week, I would write property-based tests for the windowing logic.
 
----
-
-## Disclaimer
-
-This is a **prototype/demo**. Factory data is entirely simulated from the real CETP baseline. The MPCB API endpoints match the v2.3 specification structure but make no live connections.
+## License
+MIT

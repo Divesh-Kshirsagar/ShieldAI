@@ -33,7 +33,10 @@ import httpx
 import pathway as pw
 
 from src.backtrack import attribute_event, build_factory_index
-from src.constants import ALERT_LOG_PATH, SHIELD_WEBHOOK_URL
+from src.config import CONFIG as _cfg
+
+_ALERT_LOG_PATH:     str = _cfg.alert_log_path
+_SHIELD_WEBHOOK_URL: str = _cfg.shield_webhook_url
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +90,8 @@ def _make_evidence_callback(
             "factory_tss":        attribution["factory_tss"],
         }
 
-        Path(ALERT_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-        with open(ALERT_LOG_PATH, "a", encoding="utf-8") as f:
+        Path(_ALERT_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        with open(_ALERT_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
         print(
@@ -98,7 +101,7 @@ def _make_evidence_callback(
             f"Level: {record['alert_level']}"
         )
 
-        if SHIELD_WEBHOOK_URL:
+        if _SHIELD_WEBHOOK_URL:
             _fire_webhook(record)
 
     return _callback
@@ -133,7 +136,7 @@ def attach_alert_sink(
 def _fire_webhook(record: dict) -> None:
     """POST the evidence record to the configured webhook URL (best-effort)."""
     try:
-        response = httpx.post(SHIELD_WEBHOOK_URL, json=record, timeout=5.0)
+        response = httpx.post(_SHIELD_WEBHOOK_URL, json=record, timeout=5.0)
         response.raise_for_status()
         print(f"[WEBHOOK] Delivered — HTTP {response.status_code}")
     except Exception as exc:  # noqa: BLE001
@@ -167,7 +170,7 @@ def send_email_alert(record: dict) -> None:
       <tr><td><b>Attributed Factory</b></td><td><strong>{record['attributed_factory']}</strong></td></tr>
       <tr><td><b>Factory COD @ T-15min</b></td><td>{record['factory_cod']} mg/L</td></tr>
     </table>
-    <p>Evidence logged: {ALERT_LOG_PATH}</p>
+    <p>Evidence logged: {_ALERT_LOG_PATH}</p>
     """
 
     msg = MIMEText(body, "html")

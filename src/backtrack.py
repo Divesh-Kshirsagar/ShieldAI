@@ -37,18 +37,21 @@ Usage
 """
 
 import datetime
+import logging
 from pathlib import Path
 
 import pandas as pd
 
-from src.constants import (
-    FACTORY_DATA_DIR,
-    PIPE_TRAVEL_MINUTES,
-    ASOF_TOLERANCE_SECONDS,
-)
+from src.config import CONFIG as _cfg
+
+_FACTORY_DATA_DIR:      str = _cfg.factory_data_directory
+_PIPE_TRAVEL_MINUTES:   int = _cfg.pipe_travel_minutes
+_ASOF_TOLERANCE_SECONDS: int = _cfg.asof_tolerance_seconds
+
+log = logging.getLogger(__name__)
 
 
-def build_factory_index(factory_dir: str = FACTORY_DATA_DIR) -> pd.DataFrame:
+def build_factory_index(factory_dir: str = _FACTORY_DATA_DIR) -> pd.DataFrame:
     """Load all factory CSVs into a single sorted DataFrame for fast backtrack lookup.
 
     Called once at pipeline startup — factory data is historical so loading
@@ -75,16 +78,18 @@ def build_factory_index(factory_dir: str = FACTORY_DATA_DIR) -> pd.DataFrame:
         dfs.append(df)
 
     index = pd.concat(dfs, ignore_index=True).sort_values("time_dt").reset_index(drop=True)
-    print(f"  [BACKTRACK] Factory index loaded: {len(index):,} rows across "
-          f"{index['factory_id'].nunique()} factories")
+    log.info(
+        "config loaded",
+        extra={"index_rows": len(index), "factories": index['factory_id'].nunique()},
+    )
     return index
 
 
 def attribute_event(
     cetp_time: str,
     factory_index: pd.DataFrame,
-    travel_minutes: int = PIPE_TRAVEL_MINUTES,
-    tolerance_seconds: int = ASOF_TOLERANCE_SECONDS,
+    travel_minutes: int = _PIPE_TRAVEL_MINUTES,
+    tolerance_seconds: int = _ASOF_TOLERANCE_SECONDS,
 ) -> dict:
     """Find the factory most likely responsible for a CETP shock event.
 

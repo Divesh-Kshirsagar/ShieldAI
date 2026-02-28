@@ -24,6 +24,7 @@ Run
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -32,57 +33,86 @@ sys.path.insert(0, str(ROOT))
 
 import pathway as pw
 
-from src.alert     import attach_alert_sink
-from src.backtrack import build_factory_index
-from src.constants import CETP_DATA_DIR, FACTORY_DATA_DIR
-from src.ingest    import load_cetp_stream
-from src.tripwire  import detect_anomalies
+from src.logger import configure_logging
+from src.config import CONFIG as _cfg
+from src.ingest import load_cetp_stream, load_factory_streams
+from src.aggregate import build_industrial_stream
+from src.multivariate import build_group_anomalies
+from src.eri import build_eri_stream
+from src.alerts import build_alert_stream
+from src.alert import attach_alert_sink
+from src.metrics_aggregator import build_metrics_table
+
+log = logging.getLogger(__name__)
+
+_CETP_DATA_DIR:    str = _cfg.cetp_data_directory
+_FACTORY_DATA_DIR: str = _cfg.factory_data_directory
 
 
 def build_pipeline(
-    cetp_dir: str = CETP_DATA_DIR,
-    factory_dir: str = FACTORY_DATA_DIR,
-) -> None:
-    """Construct and run the Phase 1 Pathway computation graph.
+    cetp_dir: str = _CETP_DATA_DIR,
+    factory_dir: str = _FACTORY_DATA_DIR,
+) -> pw.Table:
+    """Construct the full SHIELD AI pipeline (Phase 2 + Metrics).
 
-    Steps:
-        1. Load factory index into memory (pandas) for backtrack attribution.
-        2. Start Pathway streaming read of CETP CSV.
-        3. Apply tripwire filter: COD >= COD_THRESHOLD → shock_events table.
-        4. Attach evidence log sink with backtrack attribution callback.
-        5. pw.run() — processes all existing rows then tails for new data.
-
-    Args:
-        cetp_dir:    Directory containing cetp_clean.csv.
-        factory_dir: Directory containing factory_A/B/C/D.csv.
+    Returns:
+        pipeline_metrics — Pathway Table with real-time KPIs.
     """
-    # Step 1 — Eagerly load the factory index (pandas, not Pathway)
-    # This is called before pw.run() so the index is available in the callback.
-    factory_index = build_factory_index(factory_dir)
-
-    # Step 2 — CETP streaming read + NA filter
+    # 1. Ingestion
     cetp_stream = load_cetp_stream(cetp_dir)
+    factory_stream = build_industrial_stream(factory_dir) # already filtered by ingest.py updates
 
-    # Step 3 — Tripwire: filter to shock events
-    shock_events = detect_anomalies(cetp_stream)
+    # 2. Multivariate Anomaly Detection (Group-level)
+    group_anomalies = build_group_anomalies(factory_stream)
 
-    # Step 4 — Register the evidence log sink (attributions run inside callback)
-    attach_alert_sink(shock_events, factory_index)
+    # 3. Environmental Risk Index (ERI)
+    eri_stream = build_eri_stream(group_anomalies)
+
+    # 4. Risk-Gated Alerts
+    active_alerts = build_alert_stream(eri_stream)
+
+    # 5. Sinks
+    # Phase 2 Sink (Alert Registry / Evidence Log)
+    # We use build_factory_index internally if None is passed
+    attach_alert_sink(active_alerts)
+
+    # 6. Metrics Aggregation (The new requirement)
+    # We provide:
+    #   input_stream = factory_stream (union of all factories)
+    #   anomaly_stream = group_anomalies
+    #   eri_stream = eri_stream
+    #   alert_stream = active_alerts
+    metrics_table = build_metrics_table(
+        input_stream=factory_stream,
+        anomaly_stream=group_anomalies,
+        eri_stream=eri_stream,
+        alert_stream=active_alerts
+    )
+    
+    return metrics_table
 
 
 def run_pipeline(
-    cetp_dir: str = CETP_DATA_DIR,
-    factory_dir: str = FACTORY_DATA_DIR,
+    cetp_dir: str = _CETP_DATA_DIR,
+    factory_dir: str = _FACTORY_DATA_DIR,
 ) -> None:
-    """Build and run the Phase 1 pipeline.
+    """Build and run the full SHIELD AI pipeline."""
+    configure_logging(level=_cfg.log_level)
+    
+    # Print startup diagnostic summary (80-char ASCII box)
+    from dataclasses import asdict
+    from src.startup_summary import print_startup_summary
+    print_startup_summary(asdict(_cfg))
 
-    Blocks until interrupted (Ctrl-C). Every shock event is attributed and
-    appended to data/alerts/evidence_log.jsonl in real time.
-    """
-    print("SHIELD AI — Starting Phase 1 pipeline")
-    print(f"  CETP source    : {cetp_dir}")
-    print(f"  Factory source : {factory_dir}")
-    print("  Press Ctrl-C to stop.\n")
+    log.info(
+        "pipeline started (Phase 2 + Metrics)",
+        extra={
+            "cetp_dir":    cetp_dir,
+            "factory_dir": factory_dir,
+            "log_level":   _cfg.log_level,
+            "metrics_path": _cfg.metrics_output_path,
+        },
+    )
 
     build_pipeline(cetp_dir, factory_dir)
     pw.run()
@@ -90,10 +120,10 @@ def run_pipeline(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="SHIELD AI — Phase 1 Pathway pipeline runner"
+        description="SHIELD AI — Full Pathway pipeline runner (Phase 2 + Metrics)"
     )
-    parser.add_argument("--cetp-dir",    default=CETP_DATA_DIR)
-    parser.add_argument("--factory-dir", default=FACTORY_DATA_DIR)
+    parser.add_argument("--cetp-dir",    default=_CETP_DATA_DIR)
+    parser.add_argument("--factory-dir", default=_FACTORY_DATA_DIR)
     return parser.parse_args()
 
 

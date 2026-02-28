@@ -1,0 +1,43 @@
+site_name: SHIELD AI
+site_description: Real-time industrial discharge anomaly detection for CETP compliance
+site_author: SHIELD AI Team
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: blue
+      accent: light blue
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - content.code.annotate
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - tables
+  - attr_list
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Methodology: methodology.md
+  - Assumptions: assumptions.md
+  - Math: math.md
+  - ML Roadmap: ml_roadmap.md
+  - API Reference: MpcbApi.md

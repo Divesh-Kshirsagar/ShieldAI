@@ -2,32 +2,14 @@
 SHIELD AI — Phase 2: Streamlit Dashboard
 =========================================
 
-Real-time visual interface for the Phase 1 attribution pipeline.
-
-Layout
-------
-┌─────────────────────────────────────────────────────────┐
-│  SHIELD AI                              [status badge]  │
-│─────────────────────────────────────────────────────────│
-│  Live CETP Inlet COD         │  Attribution Log         │
-│  (line chart, anomalies red) │  (newest 10 events)      │
-│──────────────────────────────┤                          │
-│  Factory Discharge Overview  │  [Download PDF Report]   │
-│  (bar chart per factory)     │                          │
-└─────────────────────────────────────────────────────────┘
-
-Data sources
-------------
-- CETP data     : data/cetp/priya_cetp_i.csv (read directly for the chart)
-- Evidence log  : data/alerts/evidence_log.jsonl (written by alert.py)
-
-The dashboard polls for new evidence via st.rerun() on a configurable interval.
-No Pathway tables are accessed directly — the dashboard reads the output files
-so it can run independently of the Pathway pipeline process.
+Reads directly from:
+  - data/cetp/cetp_clean.csv       (CETP inlet COD trend)
+  - data/factories/factory_*.csv   (factory discharge overview)
+  - data/alerts/evidence_log.jsonl (live attribution log from run_pipeline.py)
 
 Run
 ---
-    streamlit run app.py
+    uv run streamlit run app.py
 """
 
 import json
@@ -37,284 +19,364 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.constants import CETP_DATA_DIR, ALERT_LOG_PATH, COD_THRESHOLD, COD_BASELINE
+from src.constants import COD_BASELINE, COD_THRESHOLD, ALERT_LOG_PATH, CETP_DATA_DIR
 
-# ---------------------------------------------------------------------------
-# Page config
-# ---------------------------------------------------------------------------
-
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="SHIELD AI",
+    page_title="SHIELD AI — Industrial Discharge Monitor",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# Custom CSS
-# ---------------------------------------------------------------------------
-
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Dark industrial theme */
-    .stApp { background-color: #0d1117; color: #c9d1d9; }
-    .metric-card {
-        background: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        padding: 1rem;
-        text-align: center;
-    }
-    .alert-high   { color: #f85149; font-weight: bold; }
-    .alert-medium { color: #e3b341; font-weight: bold; }
-    .header-title {
-        font-size: 2.2rem;
-        font-weight: 700;
-        letter-spacing: -1px;
-        color: #58a6ff;
-    }
-    .subheader { color: #8b949e; font-size: 0.9rem; }
-    div[data-testid="stMetricValue"] { font-size: 1.8rem; color: #39d353; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+html, body, .stApp { background: #0d1117; color: #c9d1d9; font-family: 'Inter', sans-serif; }
+
+/* Sidebar */
+[data-testid="stSidebar"] { background: #161b22; border-right: 1px solid #30363d; }
+
+/* Metric cards */
+[data-testid="stMetric"] {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+}
+[data-testid="stMetricValue"] { font-size: 2rem !important; color: #58a6ff; }
+[data-testid="stMetricLabel"] { color: #8b949e; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+[data-testid="stMetricDelta"] { font-size: 0.85rem; }
+
+/* Section headers */
+.section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #8b949e;
+    border-bottom: 1px solid #21262d;
+    padding-bottom: 6px;
+    margin-bottom: 1rem;
+}
+
+/* Alert badge */
+.badge-high   { background:#f8514920; color:#f85149; border:1px solid #f8514940; border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600; }
+.badge-medium { background:#e3b34120; color:#e3b341; border:1px solid #e3b34140; border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600; }
+.badge-none   { background:#30363d;   color:#8b949e; border:1px solid #30363d;   border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600; }
+
+/* Evidence table row */
+.ev-row {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 0.5rem;
+    align-items: center;
+    font-size: 0.82rem;
+}
+.ev-factory { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: #79c0ff; }
+.ev-time    { color: #8b949e; }
+.ev-cod     { color: #39d353; font-family: 'JetBrains Mono', monospace; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
-
-with st.sidebar:
-    st.markdown("## ⚙️ Settings")
-    refresh_secs = st.slider("Auto-refresh (s)", 2, 30, 5)
-    show_na_rows = st.checkbox("Show NA / BLACKOUT rows in history", value=False)
-    st.markdown("---")
-    st.markdown("### 🔧 Thresholds")
-    st.metric("COD Baseline",   f"{COD_BASELINE} mg/L")
-    st.metric("COD Threshold",  f"{COD_THRESHOLD} mg/L")
-    st.markdown("---")
-    st.markdown("**SHIELD AI v1** — Prototype Demo")
-    st.markdown("Branch: `v1` | Data: Feb 2026")
-
-
-# ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
-
-st.markdown('<div class="header-title">🛡️ SHIELD AI</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="subheader">Real-time industrial discharge attribution for CETP compliance</div>',
-    unsafe_allow_html=True,
-)
-st.markdown("---")
-
-
-# ---------------------------------------------------------------------------
-# Data loaders
-# ---------------------------------------------------------------------------
+# ── Data loaders ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=5)
-def load_cetp_data() -> pd.DataFrame:
-    """Load and clean the CETP CSV for charting.
-
-    Returns a DataFrame with columns: time (datetime), cod (float).
-    Rows with NA COD are dropped for chart clarity unless show_na_rows is enabled.
-    """
-    cetp_path = Path(CETP_DATA_DIR) / "priya_cetp_i.csv"
-    if not cetp_path.exists():
-        return pd.DataFrame(columns=["time", "cod"])
-
-    df = pd.read_csv(cetp_path)
-    df = df.rename(columns={
-        "Time": "time",
-        "CETP_INLET-COD - (mg/l) Raw": "cod",
-    })
-    df = df[["time", "cod"]].copy()
+def load_cetp() -> pd.DataFrame:
+    p = Path(CETP_DATA_DIR) / "cetp_clean.csv"
+    if not p.exists():
+        return pd.DataFrame(columns=["time", "cetp_inlet_cod"])
+    df = pd.read_csv(p, dtype={"time": str})
     df["time"] = pd.to_datetime(df["time"], format="%Y-%m-%d %H:%M", errors="coerce")
-    df["cod"]  = pd.to_numeric(df["cod"], errors="coerce")
-    df = df.dropna(subset=["cod"])
-    return df.sort_values("time").reset_index(drop=True)
+    df["cetp_inlet_cod"] = pd.to_numeric(df["cetp_inlet_cod"], errors="coerce")
+    return df.dropna(subset=["cetp_inlet_cod"]).sort_values("time").reset_index(drop=True)
 
 
 @st.cache_data(ttl=3)
-def load_evidence_log() -> list[dict]:
-    """Load all evidence records from the JSONL log.
-
-    Returns a list of dicts, newest-first.
-    """
-    log_path = Path(ALERT_LOG_PATH)
-    if not log_path.exists():
+def load_evidence() -> list[dict]:
+    p = Path(ALERT_LOG_PATH)
+    if not p.exists():
         return []
-
-    records = []
-    with open(log_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-
-    # Sort newest first
-    return list(reversed(records))
+    recs = []
+    try:
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    recs.append(json.loads(line))
+    except Exception:
+        pass
+    return list(reversed(recs))  # newest first
 
 
-@st.cache_data(ttl=10)
-def load_factory_overview() -> pd.DataFrame:
-    """Load a summary COD reading per factory from factory CSVs.
-
-    Returns a DataFrame with columns: factory_id, mean_cod, max_cod.
-    """
-    factory_dir = Path("data/factories")
+@st.cache_data(ttl=30)
+def load_factory_summary() -> pd.DataFrame:
     rows = []
-    for csv_path in sorted(factory_dir.glob("factory_*.csv")):
-        df = pd.read_csv(csv_path)
-        df = df.rename(columns={"COD - (mg/l) Raw": "cod", "factory_id": "factory_id"})
+    for p in sorted(Path("data/factories").glob("factory_*.csv")):
+        df = pd.read_csv(p, dtype={"time": str})
         df["cod"] = pd.to_numeric(df["cod"], errors="coerce")
         clean = df.dropna(subset=["cod"])
         if not clean.empty:
             rows.append({
                 "factory_id": clean["factory_id"].iloc[0],
-                "mean_cod":   round(clean["cod"].mean(), 2),
-                "max_cod":    round(clean["cod"].max(), 2),
+                "mean_cod":   round(clean["cod"].mean(), 1),
+                "max_cod":    round(clean["cod"].max(), 1),
+                "std_cod":    round(clean["cod"].std(), 2),
             })
     return pd.DataFrame(rows)
 
 
-# ---------------------------------------------------------------------------
-# Main layout — row 1: KPIs
-# ---------------------------------------------------------------------------
+# ── Fetch data ────────────────────────────────────────────────────────────────
+cetp_df   = load_cetp()
+evidence  = load_evidence()
+factory_df = load_factory_summary()
 
-cetp_df   = load_cetp_data()
-evidence  = load_evidence_log()
-factory_df = load_factory_overview()
 
-col1, col2, col3, col4 = st.columns(4)
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🛡️ SHIELD AI")
+    st.markdown('<div class="section-title">Display</div>', unsafe_allow_html=True)
+    refresh_secs   = st.slider("Auto-refresh (s)", 3, 30, 5)
+    chart_hours    = st.slider("Chart window (hours)", 1, 24, 12)
+    show_threshold = st.checkbox("Show threshold line", value=True)
 
-with col1:
-    total_readings = len(cetp_df)
-    st.metric("📊 Total CETP Readings", f"{total_readings:,}")
+    st.markdown('<div class="section-title">Thresholds</div>', unsafe_allow_html=True)
+    st.metric("COD Baseline",   f"{COD_BASELINE} mg/L")
+    st.metric("COD Threshold",  f"{COD_THRESHOLD} mg/L")
 
-with col2:
-    spikes = len(cetp_df[cetp_df["cod"] >= COD_THRESHOLD]) if not cetp_df.empty else 0
-    st.metric("⚡ Threshold Breaches", spikes, delta="COD ≥ 250 mg/L")
+    st.markdown('<div class="section-title">Info</div>', unsafe_allow_html=True)
+    st.caption(f"CETP rows: {len(cetp_df):,}")
+    st.caption(f"Evidence log: {len(evidence)} alerts")
+    if evidence:
+        st.caption(f"Last alert: {evidence[0].get('cetp_event_time','—')}")
+    st.markdown("---")
+    st.caption("SHIELD AI v1 · Branch: `v1`")
+    st.caption("Data: Feb 2026 (priya_cetp_i.csv)")
 
-with col3:
-    st.metric("🔍 Attributed Events", len(evidence))
 
-with col4:
-    latest_factory = evidence[0].get("attributed_factory", "—") if evidence else "—"
-    st.metric("🏭 Latest Attribution", latest_factory)
+# ── Header ────────────────────────────────────────────────────────────────────
+col_title, col_status = st.columns([4, 1])
+with col_title:
+    st.markdown("# 🛡️ SHIELD AI")
+    st.markdown('<p style="color:#8b949e;margin-top:-16px;">Real-time industrial discharge attribution for CETP compliance</p>', unsafe_allow_html=True)
+with col_status:
+    pipeline_running = Path(ALERT_LOG_PATH).exists()
+    st.markdown(
+        f'<div style="text-align:right;margin-top:1.5rem;">'
+        f'<span style="background:{"#1a4731" if pipeline_running else "#3d1a1a"};'
+        f'color:{"#3fb950" if pipeline_running else "#f85149"};'
+        f'border-radius:20px;padding:4px 12px;font-size:0.8rem;font-weight:600;">'
+        f'{"● ACTIVE" if pipeline_running else "● OFFLINE"}</span></div>',
+        unsafe_allow_html=True,
+    )
 
 st.markdown("---")
 
 
-# ---------------------------------------------------------------------------
-# Row 2: CETP chart | Evidence log
-# ---------------------------------------------------------------------------
+# ── KPI row ───────────────────────────────────────────────────────────────────
+k1, k2, k3, k4, k5 = st.columns(5)
 
-chart_col, log_col = st.columns([3, 2], gap="medium")
+with k1:
+    st.metric("📊 CETP Readings", f"{len(cetp_df):,}")
+with k2:
+    breach_count = int((cetp_df["cetp_inlet_cod"] >= COD_THRESHOLD).sum()) if not cetp_df.empty else 0
+    st.metric("⚡ Threshold Breaches", breach_count, delta=f"≥{COD_THRESHOLD} mg/L")
+with k3:
+    st.metric("🔍 Attributed Events", len(evidence))
+with k4:
+    high_alerts = sum(1 for r in evidence if r.get("alert_level") == "HIGH")
+    st.metric("🔴 HIGH Alerts", high_alerts)
+with k5:
+    top_factory = "—"
+    if evidence:
+        from collections import Counter
+        factories = [r["attributed_factory"] for r in evidence if r.get("attributed_factory")]
+        if factories:
+            top_factory = Counter(factories).most_common(1)[0][0]
+    st.metric("🏭 Top Attributed", top_factory)
+
+
+# ── Row 2: CETP trend chart + live attribution feed ───────────────────────────
+st.markdown("---")
+chart_col, log_col = st.columns([3, 2], gap="large")
 
 with chart_col:
-    st.subheader("📈 Live CETP Inlet COD")
+    st.markdown('<div class="section-title">CETP Inlet COD — Live Trend</div>', unsafe_allow_html=True)
 
     if cetp_df.empty:
-        st.info("No CETP data loaded.")
+        st.info("No CETP data — run `uv run python src/simulate_factories.py` first.")
     else:
-        # Mark anomaly rows
-        cetp_chart = cetp_df.copy()
-        cetp_chart["is_anomaly"] = cetp_chart["cod"] >= COD_THRESHOLD
+        # Slice to chart window
+        t_end   = cetp_df["time"].max()
+        t_start = t_end - pd.Timedelta(hours=chart_hours)
+        view    = cetp_df[cetp_df["time"] >= t_start].copy()
+        view    = view.set_index("time")[["cetp_inlet_cod"]]
 
-        # Show last 720 rows (~12 hours at every-3-min cadence)
-        display_df = cetp_chart.tail(720).set_index("time")
+        # Colour code: normal vs anomaly
+        normal_mask  = view["cetp_inlet_cod"] < COD_THRESHOLD
+        normal_view  = view[normal_mask]
+        anomaly_view = view[~normal_mask]
 
-        # Split normal vs anomaly
-        normal_df  = display_df[~display_df["is_anomaly"]][["cod"]]
-        anomaly_df = display_df[ display_df["is_anomaly"]][["cod"]]
+        if show_threshold:
+            threshold_line = view.copy()
+            threshold_line["threshold"] = COD_THRESHOLD
+            st.line_chart(threshold_line, color=["#58a6ff", "#f8514930"])
+        else:
+            st.line_chart(normal_view, color=["#58a6ff"])
 
-        # Baseline reference line
-        baseline_series = display_df[["cod"]].copy()
-        baseline_series["cod"] = COD_BASELINE
+        if not anomaly_view.empty:
+            st.warning(
+                f"⚠️ **{len(anomaly_view)} breaches** in last {chart_hours}h "
+                f"(COD ≥ {COD_THRESHOLD} mg/L)"
+            )
 
-        st.line_chart(normal_df, color="#39d353")
+        # COD stats
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Current COD", f"{view['cetp_inlet_cod'].iloc[-1]:.1f} mg/L")
+        s2.metric("Max (window)", f"{view['cetp_inlet_cod'].max():.1f} mg/L")
+        s3.metric("Mean (window)", f"{view['cetp_inlet_cod'].mean():.1f} mg/L")
 
-        if not anomaly_df.empty:
-            st.warning(f"⚠️ {len(anomaly_df)} anomaly readings ≥ {COD_THRESHOLD} mg/L in this window")
-            st.line_chart(anomaly_df, color="#f85149")
-
-        st.caption(f"Baseline: {COD_BASELINE} mg/L | Threshold: {COD_THRESHOLD} mg/L")
 
 with log_col:
-    st.subheader("🔎 Attribution Log")
+    st.markdown('<div class="section-title">Live Attribution Log</div>', unsafe_allow_html=True)
 
     if not evidence:
         st.info(
-            "No shock events detected yet.\n\n"
-            "Run `python src/run_pipeline.py` to start the attribution pipeline."
+            "No evidence yet.\n\n"
+            "**Start the pipeline:**\n```\nuv run python src/run_pipeline.py\n```"
         )
     else:
-        for i, rec in enumerate(evidence[:10]):
-            level = rec.get("alert_level", "MEDIUM")
-            css   = "alert-high" if level == "HIGH" else "alert-medium"
-            factory = rec.get("attributed_factory", "Unknown")
-            event_t = rec.get("cetp_event_time", "—")
-            cod     = rec.get("cetp_cod", "—")
-            f_cod   = rec.get("factory_cod", "—")
+        # Show most recent 12 events
+        for rec in evidence[:12]:
+            level     = rec.get("alert_level", "MEDIUM")
+            factory   = rec.get("attributed_factory") or "—"
+            cetp_t    = rec.get("cetp_event_time", "—")
+            cetp_cod  = rec.get("cetp_cod")
+            f_cod     = rec.get("factory_cod")
+            bt_time   = rec.get("backtrack_time", "—")
+            badge_cls = "badge-high" if level == "HIGH" else "badge-medium" if level == "MEDIUM" else "badge-none"
 
-            with st.expander(f"{'🔴' if level=='HIGH' else '🟡'} {event_t} → {factory}", expanded=(i==0)):
-                st.markdown(f"""
-| Field | Value |
-|---|---|
-| **Alert Level** | <span class="{css}">{level}</span> |
-| **CETP COD** | {cod} mg/L |
-| **Attributed Factory** | **{factory}** |
-| **Factory COD @ T-15min** | {f_cod} mg/L |
-| **Backtrack Time** | {rec.get('backtrack_time', '—')} |
-                """, unsafe_allow_html=True)
+            cetp_cod_str = f"{cetp_cod:.1f}" if cetp_cod is not None else "—"
+            f_cod_str    = f"{f_cod:.1f}" if f_cod is not None else "—"
 
-        # Download button
+            st.markdown(f"""
+<div class="ev-row">
+  <div>
+    <span class="ev-factory">{factory}</span><br>
+    <span class="ev-time">↑ {cetp_t}</span>
+  </div>
+  <div>
+    <span style="color:#8b949e;font-size:0.75rem;">CETP COD</span><br>
+    <span class="ev-cod">{cetp_cod_str} mg/L</span>
+  </div>
+  <div>
+    <span style="color:#8b949e;font-size:0.75rem;">Factory COD @ T-15</span><br>
+    <span class="ev-cod">{f_cod_str} mg/L</span>
+  </div>
+  <div style="text-align:right;">
+    <span class="{badge_cls}">{level}</span><br>
+    <span class="ev-time" style="font-size:0.7rem;">{bt_time}</span>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        # Download log
         st.markdown("---")
-        if st.button("📥 Download Evidence Log (JSONL)"):
-            log_path = Path(ALERT_LOG_PATH)
-            if log_path.exists():
-                st.download_button(
-                    label="Save evidence_log.jsonl",
-                    data=log_path.read_bytes(),
-                    file_name="evidence_log.jsonl",
-                    mime="application/jsonl",
-                )
+        log_bytes = Path(ALERT_LOG_PATH).read_bytes() if Path(ALERT_LOG_PATH).exists() else b""
+        st.download_button(
+            label="📥 Download evidence_log.jsonl",
+            data=log_bytes,
+            file_name="evidence_log.jsonl",
+            mime="application/json",
+            use_container_width=True,
+        )
 
 
-# ---------------------------------------------------------------------------
-# Row 3: Factory overview bar chart
-# ---------------------------------------------------------------------------
-
+# ── Row 3: Factory discharge overview ─────────────────────────────────────────
 st.markdown("---")
-st.subheader("🏭 Factory Discharge Overview")
+st.markdown('<div class="section-title">Factory Discharge Overview</div>', unsafe_allow_html=True)
 
 if factory_df.empty:
-    st.info("Run `python src/simulate_factories.py` to generate factory data first.")
+    st.info("Run `uv run python src/simulate_factories.py` to generate factory data.")
 else:
-    bar_col1, bar_col2 = st.columns(2)
-    with bar_col1:
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
         st.caption("Mean COD per factory (mg/L)")
-        st.bar_chart(factory_df.set_index("factory_id")[["mean_cod"]])
-    with bar_col2:
+        st.bar_chart(
+            factory_df.set_index("factory_id")[["mean_cod"]],
+            color="#58a6ff",
+        )
+    with fc2:
         st.caption("Peak COD per factory (mg/L)")
-        peak = factory_df.set_index("factory_id")[["max_cod"]]
-        st.bar_chart(peak)
+        st.bar_chart(
+            factory_df.set_index("factory_id")[["max_cod"]],
+            color="#f85149",
+        )
+    with fc3:
+        st.caption("COD Std Dev (variance indicator)")
+        st.bar_chart(
+            factory_df.set_index("factory_id")[["std_cod"]],
+            color="#e3b341",
+        )
 
-    # Annotate which factory is the shock-load culprit
-    if not factory_df.empty:
-        rogue = factory_df.loc[factory_df["max_cod"].idxmax(), "factory_id"]
-        st.success(f"📌 Highest peak discharge: **{rogue}** — matches simulated shock-load factory.")
+    # Factory table
+    st.dataframe(
+        factory_df.rename(columns={
+            "factory_id": "Factory",
+            "mean_cod":   "Mean COD (mg/L)",
+            "max_cod":    "Peak COD (mg/L)",
+            "std_cod":    "Std Dev",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # Annotation
+    rogue = factory_df.loc[factory_df["max_cod"].idxmax()]
+    low_var = factory_df.loc[factory_df["std_cod"].idxmin()]
+    ccol1, ccol2 = st.columns(2)
+    ccol1.success(f"📌 Highest peak: **{rogue['factory_id']}** ({rogue['max_cod']} mg/L) — shock-load profile")
+    if float(low_var["std_cod"]) < 1.0:
+        ccol2.warning(f"⚠️ Zero-variance: **{low_var['factory_id']}** (σ = {low_var['std_cod']}) — possible sensor tampering")
 
 
-# ---------------------------------------------------------------------------
-# Auto-refresh footer
-# ---------------------------------------------------------------------------
+# ── Row 4: Attribution breakdown ──────────────────────────────────────────────
+if evidence:
+    st.markdown("---")
+    st.markdown('<div class="section-title">Attribution Breakdown</div>', unsafe_allow_html=True)
+    from collections import Counter
 
+    factories = [r.get("attributed_factory", "UNKNOWN") for r in evidence if r.get("attributed_factory")]
+    if factories:
+        counts = Counter(factories)
+        breakdown = pd.DataFrame(
+            {"Factory": list(counts.keys()), "Events": list(counts.values())}
+        ).sort_values("Events", ascending=False)
+
+        ab1, ab2 = st.columns([1, 2])
+        with ab1:
+            st.dataframe(breakdown, hide_index=True, use_container_width=True)
+        with ab2:
+            st.bar_chart(
+                breakdown.set_index("Factory")[["Events"]],
+                color="#79c0ff",
+            )
+
+
+# ── Footer / auto-refresh ─────────────────────────────────────────────────────
 st.markdown("---")
-st.caption(f"Auto-refreshing every {refresh_secs}s · Evidence log: `{ALERT_LOG_PATH}`")
+st.caption(
+    f"🔄 Auto-refreshing every {refresh_secs}s  ·  "
+    f"Log: `{ALERT_LOG_PATH}`  ·  "
+    f"Threshold: {COD_THRESHOLD} mg/L  ·  "
+    f"Baseline: {COD_BASELINE} mg/L"
+)
 time.sleep(refresh_secs)
 st.rerun()

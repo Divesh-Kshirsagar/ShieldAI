@@ -22,7 +22,11 @@ theme:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.arithmatex:
       generic: true
   - pymdownx.highlight:
@@ -32,6 +36,11 @@ markdown_extensions:
 
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+
+extra_css: []
+
+hooks: []
 
 nav:
   - Home: index.md
@@ -40,4 +49,3 @@ nav:
   - Assumptions: assumptions.md
   - Math: math.md
   - ML Roadmap: ml_roadmap.md
-  - API Reference: MpcbApi.md
